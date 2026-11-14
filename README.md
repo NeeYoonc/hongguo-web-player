@@ -57,6 +57,19 @@ client/
 - 登录后：播放页右侧 ☆ 收藏、♡ 点赞；侧栏「收藏·点赞」「历史」查看对应列表；退出登录后回到游客态（游客的收藏/点赞暂存在浏览器本地）。
 - 说明：这是**本机账号**，不是红果官方账号。红果官方登录需要手机号短信验证并走官方 passport 接口，当前核心未接入；本机账号仅用于本站内的数据归属，不涉及红果账号权益。
 
+## 群晖 DSM 7 套件（SPK）
+
+已提供套件打包（见 `nas/`），拆成两个包：
+
+| 顺序 | 套件 | 说明 |
+|---|---|---|
+| 1 | `ffmpeg-static` | 静态 ffmpeg/ffprobe（前置依赖，无后台服务） |
+| 2 | `hongguoweb` | Web 客户端；`INFO` 内含 `install_dep_packages="ffmpeg-static"`，**未装依赖会被套件中心拒绝安装** |
+
+- 下载：<https://github.com/NeeYoonc/hongguo-web-player/releases>（`nas-v*` 标签，x86_64 / armv8）
+- 安装：套件中心 → 手动安装 → 先 `ffmpeg-static_*.spk`，再 `hongguoweb_*.spk`（端口默认 8788，向导可改）
+- 构建/细节：见 [`nas/README.md`](nas/README.md)
+
 ## 更新记录
 
 - v126：观看进度写回红果账号（`/reading/bookapi/read_history/update/v` + `/reading/bookapi/read_progress/upload/v`，注意 update 用数字 id、upload 用字符串 id）；历史页本地进度与账号进度按时间合并。

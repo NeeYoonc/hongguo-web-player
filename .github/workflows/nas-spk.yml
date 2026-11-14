@@ -1,7 +1,8 @@
 name: build-nas-spk
 
-# 红果短剧 → 群晖 DSM 7 套件（SPK）
-#   workflow_dispatch：手动出包（版本 1.0.0-<run_number>，可用于日常验证）
+# 红果短剧 → 群晖 DSM 7 套件
+#   两个包：hongguoweb（Web 客户端，强制依赖 ffmpeg-static）+ ffmpeg-static（静态 ffmpeg/ffprobe）
+#   workflow_dispatch：手动出包（版本 1.0.0-<run_number>）
 #   push tag nas-v*：出包并发布 GitHub Release（版本取 tag 去掉 nas-v 前缀）
 on:
   workflow_dispatch:
@@ -13,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-hongguoweb:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -21,10 +22,8 @@ jobs:
         include:
           - arch: x86_64
             goarch: amd64
-            ffmpeg_asset: amd64
           - arch: armv8
             goarch: arm64
-            ffmpeg_asset: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -56,7 +55,7 @@ jobs:
           cd server
           go build -trimpath -buildvcs=false -ldflags '-s -w' -o ../.nas-build/bin/hongguoweb .
 
-      - name: Download ffmpeg.wasm
+      - name: Download ffmpeg-core.wasm
         run: |
           ok=0
           for i in 1 2 3 4 5; do
@@ -73,6 +72,49 @@ jobs:
           fi
           ls -lh .nas-build/web/ffmpeg-core.wasm || true
 
+      - name: Pack hongguoweb SPK
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          PKG=hongguoweb \
+          ARCH="${{ matrix.arch }}" \
+          VERSION="${VERSION}" \
+          BIN=".nas-build/bin/hongguoweb" \
+          WASM=".nas-build/web/ffmpeg-core.wasm" \
+          bash nas/pack-spk.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: spk-hongguoweb-${{ matrix.arch }}
+          path: dist/hongguoweb_*.spk
+          retention-days: 14
+
+  build-ffmpeg-static:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            ffmpeg_asset: amd64
+          - arch: armv8
+            ffmpeg_asset: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/nas-v* ]]; then
+            v="${GITHUB_REF#refs/tags/nas-v}"
+          else
+            v="1.0.0-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+          echo "version = ${v}"
+
       - name: Download static ffmpeg (${{ matrix.ffmpeg_asset }})
         run: |
           mkdir -p ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}"
@@ -85,42 +127,33 @@ jobs:
             fi
             echo "静态 ffmpeg 下载失败（第 $i 次），15s 后重试"; sleep 15
           done
-          if [ "$ok" = "1" ]; then
-            tar -xJf /tmp/ffmpeg.tar.xz -C ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" --strip-components=1
-            ls -lh ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffmpeg" \
-                   ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffprobe"
-          else
-            # johnvansickle 偶发不可达：降级为不内置（直连播放仍可用），不让整包构建失败
-            echo "::warning::静态 ffmpeg 下载失败，本次不内置：服务端中转模式不可用"
-            rmdir ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" 2>/dev/null || true
-          fi
+          [ "$ok" = "1" ] || { echo "::error::静态 ffmpeg 下载失败（ffmpeg-static 包必需）"; exit 1; }
+          tar -xJf /tmp/ffmpeg.tar.xz -C ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" --strip-components=1
+          ls -lh ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffmpeg" \
+                 ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffprobe"
 
-      - name: Pack SPK
+      - name: Pack ffmpeg-static SPK
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          PKG=ffmpeg-static \
           ARCH="${{ matrix.arch }}" \
           VERSION="${VERSION}" \
-          BIN=".nas-build/bin/hongguoweb" \
           FFMPEG_DIR=".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" \
-          WASM=".nas-build/web/ffmpeg-core.wasm" \
           bash nas/pack-spk.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: spk-${{ matrix.arch }}
-          path: dist/*.spk
+          name: spk-ffmpeg-static-${{ matrix.arch }}
+          path: dist/ffmpeg-static_*.spk
           retention-days: 14
 
   release:
-    needs: build
+    needs: [build-hongguoweb, build-ffmpeg-static]
     if: startsWith(github.ref, 'refs/tags/nas-v')
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
@@ -134,7 +167,11 @@ jobs:
           generate_release_notes: true
           append_body: true
           body: |
-            红果短剧 Web 客户端 · 群晖 DSM 7 套件
-            - x86_64：DS923+ 等 Intel/AMD 机型
-            - armv8：ARM64 机型
-            安装：套件中心 → 手动安装 → 选 `.spk`（端口默认 8788，安装向导可改）
+            ## 红果短剧 · 群晖 DSM 7 套件
+
+            **安装顺序（必须先装依赖）**
+            1. `ffmpeg-static_<arch>-*.spk` —— 静态 ffmpeg/ffprobe（前置依赖）
+            2. `hongguoweb_<arch>-*.spk` —— Web 客户端（INFO 里 `install_dep_packages="ffmpeg-static"`，未装依赖会被拒绝安装）
+
+            架构：`x86_64`（DS923+ 等 Intel/AMD）/ `armv8`（ARM64 机型）
+            端口：默认 8788，安装向导可改；数据在 `/var/packages/hongguoweb/var`，升级保留。
