@@ -1168,3 +1168,29 @@ button.meta-tag:hover { background: rgba(255, 45, 85, .22); color: #ff8ba0; text
 @media (min-width:1000px){
   .topbar #tabs{position:absolute;left:50%;transform:translateX(-50%);margin:0;z-index:2}
 }
+
+/* ===== v127 排行榜手机端适配 =====
+   原 640px 规则写的是 .rank-layout{grid-template-columns:1fr}，但该容器是 flex → 无效，
+   手机上左侧榜单栏(148px)仍与内容并排，右侧被挤扁。这里改成纵向堆叠 + 榜单栏横向滚动。 */
+@media (max-width: 900px){
+  .rank-layout{flex-direction:column;gap:10px;min-height:0}
+  .boards{flex:0 0 auto;display:flex;flex-direction:row;gap:4px;overflow-x:auto;padding:0 0 8px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}
+  .boards::-webkit-scrollbar{display:none}
+  .board-item{flex:0 0 auto;white-space:nowrap;font-size:13px;padding:7px 12px}
+  .rank-tabs{overflow-x:auto;flex-wrap:nowrap;gap:14px;padding-bottom:8px;scrollbar-width:none}
+  .rank-tabs::-webkit-scrollbar{display:none}
+  .rank-tab{flex:0 0 auto;white-space:nowrap;font-size:13.5px}
+  .rank-list{padding-bottom:16px}
+}
+@media (max-width: 640px){
+  .rank-row{flex-wrap:wrap;gap:8px 10px;padding:10px 2px}
+  .rank-no{flex:0 0 18px;font-size:14px;padding-top:12px}
+  .rank-cover{flex:0 0 52px;width:52px;height:70px;border-radius:6px}
+  .rank-info{flex:1 1 60%}
+  .rank-title{font-size:14px}
+  .rank-tags{font-size:11.5px;gap:5px}
+  .rank-desc{font-size:11.5px}
+  .rank-metrics{font-size:11.5px}
+  .rank-actions{flex:0 0 100%;flex-direction:row;justify-content:flex-end;gap:8px;padding-top:2px}
+  .rank-actions button{padding:6px 18px;font-size:12.5px}
+}
