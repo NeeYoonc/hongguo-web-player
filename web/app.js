@@ -1336,6 +1336,8 @@ function schedulePrefetch() {
 async function applyPlan(plan, startTime) {
   try {
     const token = ++playerState.token;
+    updateCommentCount();
+    renderQuality();
     if (await tryDirectPlay(plan, startTime || 0)) {
       $('p-error').hidden = true;
       $('p-loading').hidden = false;
@@ -1343,9 +1345,7 @@ async function applyPlan(plan, startTime) {
       return;
     }
     teardownPlayer();
-    updateCommentCount();
     state.videoTime = startTime || 0;
-    renderQuality();
     $('p-error').hidden = true;
     $('p-loading').hidden = false;
     const stream = planStream(plan);
