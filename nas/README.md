@@ -66,7 +66,10 @@ ARCH=armv8 VERSION=1.0.0-3 BIN=.nas-build/bin/hongguoweb-arm64 \
 
 想依赖别的 FFmpeg 版本：加 `DEP_PKG=ffmpeg8`（或 `ffmpeg6`/`ffmpeg5`/`ffmpeg`）。
 
-产物在 `dist/`。图标已随仓库提交（`nas/assets/`），改图标后运行 `python nas/make-icons.py`。
+产物在 `dist/`。
+
+套件图标直接取自**项目自己的 logo**（`web/assets/logo.png`），由 `python nas/make-icons.py` 放大/锐化生成
+`nas/assets/` 下的 PACKAGE_ICON 与 ui/images（改 logo 后重跑一次并提交即可）。
 
 ## CI
 
