@@ -1,140 +1,107 @@
 #!/usr/bin/env bash
 #===============================================================================
-# 红果短剧 → 群晖 DSM 7 套件（SPK）打包脚本
+# 红果短剧 → 群晖 DSM 7 SPK 打包脚本
 #
-# 两个套件：
-#   PKG=hongguoweb     Web 客户端（不内置 ffmpeg，强制依赖 ffmpeg-static）
-#   PKG=ffmpeg-static  静态 ffmpeg/ffprobe 工具包（hongguoweb 的前置依赖）
+# 依赖策略（用户口径）：
+#   · 不内置 ffmpeg —— 依赖套件源里现成的 SynoCommunity FFmpeg（默认 ffmpeg7）
+#   · INFO 写 install_dep_packages → 未装该套件时套件中心拒绝安装
+#   · 社区包二进制带版本后缀（ffmpeg7/ffprobe7），启动脚本建 shim 软链给服务端用
 #
 # 用法：
-#   PKG=ffmpeg-static ARCH=x86_64 VERSION=1.0.0-1 \
-#     FFMPEG_DIR=path/to/ffmpeg-amd64-dir OUT_DIR=dist ./nas/pack-spk.sh
+#   ARCH=x86_64 VERSION=1.0.0-3 BIN=path/hongguoweb-amd64 WASM=path/ffmpeg-core.wasm \
+#     DEP_PKG=ffmpeg7 ./nas/pack-spk.sh
 #
-#   PKG=hongguoweb ARCH=x86_64 VERSION=1.0.0-2 \
-#     BIN=path/to/hongguoweb-amd64 WASM=path/to/ffmpeg-core.wasm OUT_DIR=dist ./nas/pack-spk.sh
+#   ARCH      x86_64 | armv8（DSM 架构名）
+#   VERSION   INFO 版本号（默认 1.0.0-3）
+#   DEP_PKG   依赖的 ffmpeg 套件名（默认 ffmpeg7；可换 ffmpeg8/ffmpeg6/ffmpeg5/ffmpeg）
+#   BIN       已编译的 linux 二进制（默认 $BUILD_ROOT/bin/hongguoweb-<arch>）
+#   WASM      ffmpeg-core.wasm（缺失则浏览器直连播放不可用）
+#   OUT_DIR   产物目录（默认 $PROJECT_DIR/dist）
 #
-#   ARCH          x86_64 | armv8（DSM 架构名）
-#   BIN           已编译的 linux 二进制（不传则用 $BUILD_ROOT/bin/hongguoweb-<arch>）
-#   FFMPEG_DIR    含 ffmpeg / ffprobe 的静态目录（ffmpeg-static 必填；
-#                 hongguoweb 不需要 —— ffmpeg 由依赖套件提供）
-#   WASM          ffmpeg-core.wasm（hongguoweb 用；缺失则浏览器直连播放不可用）
-#   OUT_DIR       产物目录（默认 $PROJECT_DIR/dist）
-#
-# 产物：$OUT_DIR/<包名>_<DSM架构>-<版本>.spk
+# 产物：$OUT_DIR/hongguoweb_<DSM架构>-<版本>.spk
 #===============================================================================
 set -euo pipefail
 
 NAS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$NAS_DIR/.." && pwd)"
 
-PKG="${PKG:-hongguoweb}"
+APP_NAME="hongguoweb"
+DISPLAY_NAME="红果短剧"
 ARCH="${ARCH:-x86_64}"
 case "$ARCH" in
   x86_64) BIN_ARCH=amd64 ;;
   armv8)  BIN_ARCH=arm64 ;;
   *) echo "[!] ARCH 只支持 x86_64 / armv8，收到: $ARCH" >&2; exit 1 ;;
 esac
-case "$PKG" in
-  hongguoweb)   DEFAULT_VERSION=1.0.0-2 ; DISPLAY_NAME="红果短剧" ;;
-  ffmpeg-static) DEFAULT_VERSION=1.0.0-1 ; DISPLAY_NAME="FFmpeg (静态版)" ;;
-  *) echo "[!] PKG 只支持 hongguoweb / ffmpeg-static，收到: $PKG" >&2; exit 1 ;;
-esac
 
-VERSION="${VERSION:-$DEFAULT_VERSION}"
+VERSION="${VERSION:-1.0.0-3}"
+DEP_PKG="${DEP_PKG:-ffmpeg7}"
 DEFAULT_PORT=8788
 BUILD_ROOT="${BUILD_ROOT:-$PROJECT_DIR/.nas-build}"
 OUT_DIR="${OUT_DIR:-$PROJECT_DIR/dist}"
 BIN="${BIN:-$BUILD_ROOT/bin/hongguoweb-$BIN_ARCH}"
-FFMPEG_DIR="${FFMPEG_DIR:-$BUILD_ROOT/ffmpeg/$BIN_ARCH}"
 WASM="${WASM:-$BUILD_ROOT/web/ffmpeg-core.wasm}"
 ASSETS="$NAS_DIR/assets"
-DEP_PKG="ffmpeg-static"
 
 [ -f "$ASSETS/PACKAGE_ICON.PNG" ] || { echo "[!] 缺少图标，先运行 python nas/make-icons.py" >&2; exit 1; }
+[ -f "$BIN" ] || { echo "[!] 找不到二进制: $BIN" >&2; exit 1; }
+case "$(head -c 4 "$BIN" 2>/dev/null | od -An -c | tr -d ' \n')" in
+  *177ELF*) : ;;
+  *) echo "[!] $BIN 不是 Linux ELF（是不是忘了 GOOS=linux？）" >&2; exit 1 ;;
+esac
 
-TARGET="$BUILD_ROOT/target-$PKG-$ARCH"
-ASSEMBLE="$BUILD_ROOT/assemble-$PKG-$ARCH"
+TARGET="$BUILD_ROOT/target-$ARCH"
+ASSEMBLE="$BUILD_ROOT/assemble-$ARCH"
 rm -rf "$TARGET" "$ASSEMBLE"
-mkdir -p "$TARGET/bin" "$ASSEMBLE/conf" "$ASSEMBLE/scripts" "$OUT_DIR"
+mkdir -p "$TARGET/bin" "$TARGET/web" "$ASSEMBLE/conf" "$ASSEMBLE/scripts" \
+         "$ASSEMBLE/ui/images" "$ASSEMBLE/WIZARD_UIFILES" "$OUT_DIR"
 
-# ── 依赖工具函数 ──────────────────────────────────────────────────────────────
-is_elf() {
-  [ -f "$1" ] || return 1
-  case "$(head -c 4 "$1" 2>/dev/null | od -An -c | tr -d ' \n')" in
-    *177ELF*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-if [ "$PKG" = "hongguoweb" ]; then
-  # ── hongguoweb：服务端 + 前端 ────────────────────────────────────────────────
-  [ -f "$BIN" ] || { echo "[!] 找不到二进制: $BIN" >&2; exit 1; }
-  is_elf "$BIN" || { echo "[!] $BIN 不是 Linux ELF（是不是忘了 GOOS=linux？）" >&2; exit 1; }
-
-  cp "$BIN" "$TARGET/bin/hongguoweb"
-  chmod 755 "$TARGET/bin/hongguoweb"
-  cp -a "$PROJECT_DIR/web/." "$TARGET/web_tmp/"
-  mv "$TARGET/web_tmp" "$TARGET/web"
-  find "$TARGET/web" -name '*.bak' -delete 2>/dev/null || true
-  mkdir -p "$TARGET/web/assets/ffmpeg"
-  if [ -f "$WASM" ]; then
-    cp "$WASM" "$TARGET/web/assets/ffmpeg/ffmpeg-core.wasm"
-    echo "  ✓ 内置 ffmpeg-core.wasm ($(du -h "$WASM" | cut -f1))"
-  else
-    echo "  ! 未内置 ffmpeg-core.wasm（$WASM 缺失）：浏览器直连播放不可用"
-  fi
+# ── target：bin/hongguoweb + web/（不含 ffmpeg） ────────────────────────────────
+cp "$BIN" "$TARGET/bin/hongguoweb"
+chmod 755 "$TARGET/bin/hongguoweb"
+cp -a "$PROJECT_DIR/web/." "$TARGET/web/"
+find "$TARGET/web" -name '*.bak' -delete 2>/dev/null || true
+mkdir -p "$TARGET/web/assets/ffmpeg"
+if [ -f "$WASM" ]; then
+  cp "$WASM" "$TARGET/web/assets/ffmpeg/ffmpeg-core.wasm"
+  echo "  ✓ 内置 ffmpeg-core.wasm ($(du -h "$WASM" | cut -f1))"
 else
-  # ── ffmpeg-static：只装 ffmpeg / ffprobe ─────────────────────────────────────
-  is_elf "$FFMPEG_DIR/ffmpeg" || { echo "[!] $FFMPEG_DIR/ffmpeg 不存在或不是 ELF" >&2; exit 1; }
-  is_elf "$FFMPEG_DIR/ffprobe" || { echo "[!] $FFMPEG_DIR/ffprobe 不存在或不是 ELF" >&2; exit 1; }
-  cp "$FFMPEG_DIR/ffmpeg" "$TARGET/bin/ffmpeg"
-  cp "$FFMPEG_DIR/ffprobe" "$TARGET/bin/ffprobe"
-  chmod 755 "$TARGET/bin/ffmpeg" "$TARGET/bin/ffprobe"
-  echo "  ✓ ffmpeg ($(du -h "$FFMPEG_DIR/ffmpeg" | cut -f1)) / ffprobe ($(du -h "$FFMPEG_DIR/ffprobe" | cut -f1))"
+  echo "  ! 未内置 ffmpeg-core.wasm（$WASM 缺失）：浏览器直连播放不可用"
 fi
+echo "  ✓ 不内置 ffmpeg/ffprobe —— 依赖套件: ${DEP_PKG}"
 
 # ── INFO ──────────────────────────────────────────────────────────────────────
-{
-  echo "package=\"${PKG}\""
-  echo "version=\"${VERSION}\""
-  if [ "$PKG" = "hongguoweb" ]; then
-    echo "description=\"红果短剧 Web 客户端：推荐流 / 找剧 / 详情 / 弹幕 / 评论 / 直连播放的自托管播放器（需先安装 ${DEP_PKG}）。仅供个人学习研究。\""
-    echo "install_dep_packages=\"${DEP_PKG}\""
-  else
-    echo "description=\"静态编译的 ffmpeg / ffprobe（供红果短剧等套件调用服务端中转/解码）。\""
-  fi
-  echo "arch=\"${ARCH}\""
-  echo "maintainer=\"NeeYoonc\""
-  echo "maintainer_url=\"https://github.com/NeeYoonc/hongguo-web-player\""
-  echo "distributor=\"NeeYoonc\""
-  echo "distributor_url=\"https://github.com/NeeYoonc/hongguo-web-player\""
-  echo "os_min_ver=\"7.0-40000\""
-  echo "reloadui=\"yes\""
-  echo "displayname=\"${DISPLAY_NAME}\""
-  echo "helpurl=\"https://github.com/NeeYoonc/hongguo-web-player\""
-  echo "support_url=\"https://github.com/NeeYoonc/hongguo-web-player\""
-  if [ "$PKG" = "hongguoweb" ]; then
-    echo "dsmuidir=\"ui\""
-    echo "dsmappname=\"SYNO.SDS.Hongguoweb.Application\""
-    echo "changelog=\"[${VERSION}] 瘦身版：ffmpeg 改由依赖套件 ${DEP_PKG} 提供；内置 ffmpeg.wasm 浏览器直连解密\""
-  else
-    echo "changelog=\"[${VERSION}] 静态 ffmpeg/ffprobe；作为 hongguoweb 的前置依赖\""
-  fi
-  echo "checksum=\"\""
-} > "$ASSEMBLE/INFO"
+cat > "$ASSEMBLE/INFO" <<EOF
+package="${APP_NAME}"
+version="${VERSION}"
+description="红果短剧 Web 客户端：推荐流 / 找剧 / 详情 / 弹幕 / 评论 / 直连播放的自托管播放器（需先安装 ${DEP_PKG}）。仅供个人学习研究。"
+install_dep_packages="${DEP_PKG}"
+arch="${ARCH}"
+maintainer="NeeYoonc"
+maintainer_url="https://github.com/NeeYoonc/hongguo-web-player"
+distributor="NeeYoonc"
+distributor_url="https://github.com/NeeYoonc/hongguo-web-player"
+os_min_ver="7.0-40000"
+reloadui="yes"
+displayname="${DISPLAY_NAME}"
+dsmuidir="ui"
+dsmappname="SYNO.SDS.Hongguoweb.Application"
+helpurl="https://github.com/NeeYoonc/hongguo-web-player"
+support_url="https://github.com/NeeYoonc/hongguo-web-player"
+changelog="[${VERSION}] 不内置 ffmpeg：依赖套件源里的 ${DEP_PKG}（未安装时拒绝安装）；内置 ffmpeg.wasm 浏览器直连解密"
+checksum=""
+EOF
 
 # ── conf ──────────────────────────────────────────────────────────────────────
-sed "s/hongguoweb/${PKG}/g" "$ASSETS/conf/privilege" > "$ASSEMBLE/conf/privilege"
+cp "$ASSETS/conf/privilege" "$ASSEMBLE/conf/privilege"
 printf '{}' > "$ASSEMBLE/conf/resource"
 
 # ── 图标 ──────────────────────────────────────────────────────────────────────
 cp "$ASSETS/PACKAGE_ICON.PNG" "$ASSETS/PACKAGE_ICON_256.PNG" "$ASSEMBLE/"
+cp "$ASSETS/ui/images/"*.png "$ASSEMBLE/ui/images/"
 
-# ── 各包专属：ui / 脚本 ───────────────────────────────────────────────────────
-if [ "$PKG" = "hongguoweb" ]; then
-  mkdir -p "$ASSEMBLE/ui/images"
-  cp "$ASSETS/ui/images/"*.png "$ASSEMBLE/ui/images/"
-  cat > "$ASSEMBLE/ui/config" <<EOF
+# ── ui/config ────────────────────────────────────────────────────────────────
+cat > "$ASSEMBLE/ui/config" <<EOF
 {
     ".url": {
         "SYNO.SDS.Hongguoweb.Application": {
@@ -151,18 +118,20 @@ if [ "$PKG" = "hongguoweb" ]; then
 }
 EOF
 
-  cat > "$ASSEMBLE/scripts/start-stop-status" <<'SSS_EOF'
+# ── scripts/start-stop-status ────────────────────────────────────────────────
+cat > "$ASSEMBLE/scripts/start-stop-status" <<'SSS_EOF'
 #!/bin/sh
 # 红果短剧 Web 客户端 · DSM 启停脚本
-# ffmpeg/ffprobe 由依赖套件 ffmpeg-static 提供 → 把它的 bin 目录加进 PATH
+#  ffmpeg/ffprobe 由依赖套件（${DEP_PKG} 等社区 FFmpeg）提供，社区包二进制带版本后缀
+#  （ffmpeg7/ffprobe7）→ 这里在数据目录建 shim 软链，服务端按 "ffmpeg/ffprobe" 调用即可。
 PACKAGE_NAME="$SYNOPKG_PKGNAME"
 BASE="/var/packages/${PACKAGE_NAME}/target"
 VAR="/var/packages/${PACKAGE_NAME}/var"
-DEP_BIN="/var/packages/ffmpeg-static/target/bin"
 PID="$VAR/hongguoweb.pid"
 LOG="$VAR/hongguoweb.log"
 PORT_FILE="$VAR/ports"
 DEFAULT_PORT=8788
+DEP_PKG="__DEP_PKG__"
 
 resolve_port() {
   p=""
@@ -180,18 +149,41 @@ is_running() {
   kill -0 "$_p" 2>/dev/null
 }
 
+setup_ffmpeg_shim() {
+  _shim="$VAR/bin"
+  mkdir -p "$_shim" 2>/dev/null || return 0
+  # 先找声明的依赖包，再兜底其它 ffmpeg 版本包（架构一致即可）
+  for _pkg in "$DEP_PKG" ffmpeg8 ffmpeg7 ffmpeg6 ffmpeg5 ffmpeg4 ffmpeg; do
+    [ -n "$_pkg" ] || continue
+    _d="/var/packages/${_pkg}/target/bin"
+    [ -d "$_d" ] || continue
+    for _f in "$_d"/ffmpeg "$_d"/ffmpeg[0-9] "$_d"/ffmpeg[0-9][0-9]; do
+      [ -x "$_f" ] || continue
+      _probe="${_f%ffmpeg*}ffprobe${_f##*ffmpeg}"
+      [ -x "$_probe" ] || continue
+      ln -sf "$_f" "$_shim/ffmpeg" 2>/dev/null
+      ln -sf "$_probe" "$_shim/ffprobe" 2>/dev/null
+      echo "  ffmpeg: ${_f}（来自套件 ${_pkg}）"
+      return 0
+    done
+  done
+  # 兜底：系统 PATH 里已有静态 ffmpeg（如 /usr/local/bin 或 /usr/bin）
+  if command -v ffmpeg >/dev/null 2>&1; then
+    echo "  ffmpeg: $(command -v ffmpeg)（系统 PATH）"
+    return 0
+  fi
+  echo "[!] 未找到 ffmpeg：服务端中转模式不可用（浏览器直连播放不受影响）" >&2
+  return 1
+}
+
 do_start() {
   if is_running; then
     echo "已在运行 (pid $(cat "$PID"))"
     return 0
   fi
   mkdir -p "$VAR/data" "$VAR/cache" "$VAR/tmp" || return 1
-  if [ -x "$DEP_BIN/ffmpeg" ]; then
-    export PATH="$DEP_BIN:$BASE/bin:$PATH"
-  else
-    echo "[!] 依赖套件 ffmpeg-static 未安装（$DEP_BIN/ffmpeg 不存在）：服务端中转模式不可用" >&2
-    export PATH="$BASE/bin:$PATH"
-  fi
+  setup_ffmpeg_shim >&2 || true
+  export PATH="$VAR/bin:$BASE/bin:$PATH"
   PORT=$(resolve_port)
   export TMPDIR="$VAR/tmp"
   export GOMEMLIMIT=1600MiB
@@ -253,59 +245,8 @@ case "$1" in
 esac
 exit 0
 SSS_EOF
-  chmod 755 "$ASSEMBLE/scripts/start-stop-status"
-
-  # 安装向导（端口）+ 卸载向导
-  mkdir -p "$ASSEMBLE/WIZARD_UIFILES"
-  cat > "$ASSEMBLE/WIZARD_UIFILES/install_uifile" <<'WIZ_EOF'
-[{
-  "step_title": "红果短剧 端口设置",
-  "items": [{
-    "type": "textfield",
-    "desc": "Web 端口（留空使用默认 8788）",
-    "subitems": [{
-      "key": "wizard_port",
-      "desc": "端口",
-      "validator": {
-        "allowBlank": true,
-        "regex": { "expr": "/^[0-9]+$/", "errorText": "请输入数字端口" }
-      }
-    }]
-  }]
-}]
-WIZ_EOF
-  cp "$ASSEMBLE/WIZARD_UIFILES/install_uifile" "$ASSEMBLE/WIZARD_UIFILES/install_uifile_chs"
-  cat > "$ASSEMBLE/WIZARD_UIFILES/uninstall_uifile" <<'WIZ_EOF'
-[{
-  "step_title": "Uninstall package",
-  "items": [{
-    "type": "singleselect",
-    "desc": "Keep or delete package data.",
-    "subitems": [{
-      "key": "wizard_keep_data",
-      "desc": "<b>Uninstall only.</b> Keep data for future re-installation.",
-      "defaultValue": true
-    }, {
-      "key": "wizard_delete_data",
-      "desc": "<b style=\"color: red\">Erase all package data. (Not recoverable)</b>",
-      "defaultValue": false
-    }]
-  }]
-}]
-WIZ_EOF
-  cp "$ASSEMBLE/WIZARD_UIFILES/uninstall_uifile" "$ASSEMBLE/WIZARD_UIFILES/uninstall_uifile_chs"
-else
-  # ffmpeg-static：无 UI、无服务，仅提供 bin/
-  cat > "$ASSEMBLE/scripts/start-stop-status" <<'SSS_EOF'
-#!/bin/sh
-# ffmpeg-static：纯工具包，无后台服务 → 启停均为空操作
-case "$1" in
-  start|stop|restart|status) exit 0 ;;
-  *) exit 0 ;;
-esac
-SSS_EOF
-  chmod 755 "$ASSEMBLE/scripts/start-stop-status"
-fi
+sed -i "s/__DEP_PKG__/${DEP_PKG}/" "$ASSEMBLE/scripts/start-stop-status"
+chmod 755 "$ASSEMBLE/scripts/start-stop-status"
 
 # ── scripts/installer + 生命周期钩子 ─────────────────────────────────────────
 cat > "$ASSEMBLE/scripts/installer" <<'INSTALLER_EOF'
@@ -320,7 +261,6 @@ DEFAULT_PORT=8788
 setup_dirs() {
   mkdir -p "$VAR/data" "$VAR/cache" "$VAR/tmp" 2>/dev/null
   chown -R "${PACKAGE_NAME}:${PACKAGE_NAME}" "$VAR" 2>/dev/null || true
-  chmod 755 "$BASE/bin" 2>/dev/null || true
 }
 
 sync_ui() {
@@ -347,17 +287,13 @@ write_ports() {
 
 postinst() {
   setup_dirs
-  if [ -f "$BASE/web/index.html" ]; then
-    write_ports
-  fi
+  write_ports
   exit 0
 }
 
 postupgrade() {
   setup_dirs
-  if [ -f "$BASE/web/index.html" ]; then
-    write_ports
-  fi
+  write_ports
   exit 0
 }
 
@@ -373,7 +309,7 @@ preuninst() {
 
 postuninst() {
   if [ "${wizard_delete_data:-false}" = "true" ]; then
-    rm -rf "$VAR/data" "$VAR/cache" "$VAR/tmp" 2>/dev/null
+    rm -rf "$VAR/data" "$VAR/cache" "$VAR/tmp" "$VAR/bin" 2>/dev/null
     rm -f "$VAR/ports" "$VAR/hongguoweb.log" "$VAR/hongguoweb.pid" 2>/dev/null
   fi
   exit 0
@@ -390,11 +326,49 @@ HOOK_EOF
   chmod 755 "$ASSEMBLE/scripts/$hook"
 done
 
-# ── package.tgz + 外层 spk（用 Python tarfile 显式写权限位：Windows 上 tar 会丢 exec 位） ─
+# ── WIZARD_UIFILES（安装问端口 / 卸载问是否删数据） ──────────────────────────
+cat > "$ASSEMBLE/WIZARD_UIFILES/install_uifile" <<'WIZ_EOF'
+[{
+  "step_title": "红果短剧 端口设置",
+  "items": [{
+    "type": "textfield",
+    "desc": "Web 端口（留空使用默认 8788）",
+    "subitems": [{
+      "key": "wizard_port",
+      "desc": "端口",
+      "validator": {
+        "allowBlank": true,
+        "regex": { "expr": "/^[0-9]+$/", "errorText": "请输入数字端口" }
+      }
+    }]
+  }]
+}]
+WIZ_EOF
+cp "$ASSEMBLE/WIZARD_UIFILES/install_uifile" "$ASSEMBLE/WIZARD_UIFILES/install_uifile_chs"
+cat > "$ASSEMBLE/WIZARD_UIFILES/uninstall_uifile" <<'WIZ_EOF'
+[{
+  "step_title": "Uninstall package",
+  "items": [{
+    "type": "singleselect",
+    "desc": "Keep or delete package data.",
+    "subitems": [{
+      "key": "wizard_keep_data",
+      "desc": "<b>Uninstall only.</b> Keep data for future re-installation.",
+      "defaultValue": true
+    }, {
+      "key": "wizard_delete_data",
+      "desc": "<b style=\"color: red\">Erase all package data. (Not recoverable)</b>",
+      "defaultValue": false
+    }]
+  }]
+}]
+WIZ_EOF
+cp "$ASSEMBLE/WIZARD_UIFILES/uninstall_uifile" "$ASSEMBLE/WIZARD_UIFILES/uninstall_uifile_chs"
+
+# ── package.tgz + 外层 spk（Python tarfile 显式写权限位） ─────────────────────
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [ -z "$PYTHON_BIN" ]; then
   for _p in python3 python; do
-    # Windows 上 python3 可能是 Microsoft Store 占位符（能执行但什么都不做）→ 必须实测
     if command -v "$_p" >/dev/null 2>&1 && "$_p" -c 'import sys, tarfile' >/dev/null 2>&1; then
       PYTHON_BIN="$_p"
       break
@@ -404,10 +378,10 @@ fi
 [ -n "$PYTHON_BIN" ] || { echo "[!] 需要可用的 python3（含 tarfile）" >&2; exit 1; }
 
 "$PYTHON_BIN" "$NAS_DIR/mktar.py" package "$TARGET" "$ASSEMBLE/package.tgz"
-OUT_SPK="$OUT_DIR/${PKG}_${ARCH}-${VERSION}.spk"
+OUT_SPK="$OUT_DIR/${APP_NAME}_${ARCH}-${VERSION}.spk"
 rm -f "$OUT_SPK"
 "$PYTHON_BIN" "$NAS_DIR/mktar.py" spk "$ASSEMBLE" "$OUT_SPK"
 
 echo
 echo "✓ 打包完成: $OUT_SPK"
-echo "  包名: $PKG  架构: $ARCH  版本: $VERSION  大小: $(du -h "$OUT_SPK" | cut -f1)"
+echo "  架构: $ARCH  版本: $VERSION  依赖: ${DEP_PKG}  大小: $(du -h "$OUT_SPK" | cut -f1)"

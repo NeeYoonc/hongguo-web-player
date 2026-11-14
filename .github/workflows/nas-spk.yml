@@ -1,7 +1,8 @@
 name: build-nas-spk
 
-# 红果短剧 → 群晖 DSM 7 套件
-#   两个包：hongguoweb（Web 客户端，强制依赖 ffmpeg-static）+ ffmpeg-static（静态 ffmpeg/ffprobe）
+# 红果短剧 → 群晖 DSM 7 套件（SPK）
+#   依赖套件源里现成的 SynoCommunity FFmpeg（默认 ffmpeg7），不内置 ffmpeg；
+#   INFO 写 install_dep_packages → 未装依赖时套件中心拒绝安装。
 #   workflow_dispatch：手动出包（版本 1.0.0-<run_number>）
 #   push tag nas-v*：出包并发布 GitHub Release（版本取 tag 去掉 nas-v 前缀）
 on:
@@ -13,8 +14,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # 依赖的 ffmpeg 套件名（可改 ffmpeg8 / ffmpeg6 / ffmpeg5 / ffmpeg）
+  DEP_PKG: ffmpeg7
+
 jobs:
-  build-hongguoweb:
+  build:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -72,13 +77,13 @@ jobs:
           fi
           ls -lh .nas-build/web/ffmpeg-core.wasm || true
 
-      - name: Pack hongguoweb SPK
+      - name: Pack SPK
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          PKG=hongguoweb \
           ARCH="${{ matrix.arch }}" \
           VERSION="${VERSION}" \
+          DEP_PKG="${DEP_PKG}" \
           BIN=".nas-build/bin/hongguoweb" \
           WASM=".nas-build/web/ffmpeg-core.wasm" \
           bash nas/pack-spk.sh
@@ -86,71 +91,12 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: spk-hongguoweb-${{ matrix.arch }}
+          name: spk-${{ matrix.arch }}
           path: dist/hongguoweb_*.spk
           retention-days: 14
 
-  build-ffmpeg-static:
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            ffmpeg_asset: amd64
-          - arch: armv8
-            ffmpeg_asset: arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Resolve version
-        id: ver
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/nas-v* ]]; then
-            v="${GITHUB_REF#refs/tags/nas-v}"
-          else
-            v="1.0.0-${GITHUB_RUN_NUMBER}"
-          fi
-          echo "version=${v}" >> "$GITHUB_OUTPUT"
-          echo "version = ${v}"
-
-      - name: Download static ffmpeg (${{ matrix.ffmpeg_asset }})
-        run: |
-          mkdir -p ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}"
-          url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${{ matrix.ffmpeg_asset }}-static.tar.xz"
-          ok=0
-          for i in 1 2 3 4 5; do
-            if curl -fsSL --connect-timeout 30 --max-time 600 --retry 2 --retry-all-errors --retry-delay 10 \
-                 -o /tmp/ffmpeg.tar.xz "$url"; then
-              ok=1; break
-            fi
-            echo "静态 ffmpeg 下载失败（第 $i 次），15s 后重试"; sleep 15
-          done
-          [ "$ok" = "1" ] || { echo "::error::静态 ffmpeg 下载失败（ffmpeg-static 包必需）"; exit 1; }
-          tar -xJf /tmp/ffmpeg.tar.xz -C ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" --strip-components=1
-          ls -lh ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffmpeg" \
-                 ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffprobe"
-
-      - name: Pack ffmpeg-static SPK
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          PKG=ffmpeg-static \
-          ARCH="${{ matrix.arch }}" \
-          VERSION="${VERSION}" \
-          FFMPEG_DIR=".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" \
-          bash nas/pack-spk.sh
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: spk-ffmpeg-static-${{ matrix.arch }}
-          path: dist/ffmpeg-static_*.spk
-          retention-days: 14
-
   release:
-    needs: [build-hongguoweb, build-ffmpeg-static]
+    needs: build
     if: startsWith(github.ref, 'refs/tags/nas-v')
     runs-on: ubuntu-24.04
     steps:
@@ -169,9 +115,11 @@ jobs:
           body: |
             ## 红果短剧 · 群晖 DSM 7 套件
 
-            **安装顺序（必须先装依赖）**
-            1. `ffmpeg-static_<arch>-*.spk` —— 静态 ffmpeg/ffprobe（前置依赖）
-            2. `hongguoweb_<arch>-*.spk` —— Web 客户端（INFO 里 `install_dep_packages="ffmpeg-static"`，未装依赖会被拒绝安装）
+            **前置依赖**：先在套件中心「社群」里安装 **FFmpeg 7**（包名 `ffmpeg7`，SynoCommunity 提供）。
+            本包 `INFO` 写有 `install_dep_packages="ffmpeg7"` —— 未装依赖时套件中心会**拒绝安装**。
 
-            架构：`x86_64`（DS923+ 等 Intel/AMD）/ `armv8`（ARM64 机型）
-            端口：默认 8788，安装向导可改；数据在 `/var/packages/hongguoweb/var`，升级保留。
+            然后：套件中心 → 手动安装 → 选 `hongguoweb_<arch>-*.spk`（端口默认 8788，向导可改）。
+
+            - 架构：`x86_64`（DS923+ 等 Intel/AMD）/ `armv8`（ARM64 机型）
+            - 不内置 ffmpeg；启动时自动从 `/var/packages/ffmpeg7/target/bin` 建 shim（ffmpeg7 → ffmpeg）
+            - 数据在 `/var/packages/hongguoweb/var`，升级保留；卸载向导默认保留数据

@@ -59,16 +59,12 @@ client/
 
 ## 群晖 DSM 7 套件（SPK）
 
-已提供套件打包（见 `nas/`），拆成两个包：
+已提供套件打包（见 `nas/`）：**不内置 ffmpeg**，直接依赖套件中心「社群」里现成的 SynoCommunity FFmpeg。
 
-| 顺序 | 套件 | 说明 |
-|---|---|---|
-| 1 | `ffmpeg-static` | 静态 ffmpeg/ffprobe（前置依赖，无后台服务） |
-| 2 | `hongguoweb` | Web 客户端；`INFO` 内含 `install_dep_packages="ffmpeg-static"`，**未装依赖会被套件中心拒绝安装** |
-
+- 依赖：**FFmpeg 7**（包名 `ffmpeg7`）。`INFO` 里有 `install_dep_packages="ffmpeg7"`，**未装依赖时套件中心拒绝安装**
+- 安装顺序：套件中心 → 社群 → 装 FFmpeg 7 → 手动安装 `hongguoweb_<arch>-*.spk`（端口默认 8788）
 - 下载：<https://github.com/NeeYoonc/hongguo-web-player/releases>（`nas-v*` 标签，x86_64 / armv8）
-- 安装：套件中心 → 手动安装 → 先 `ffmpeg-static_*.spk`，再 `hongguoweb_*.spk`（端口默认 8788，向导可改）
-- 构建/细节：见 [`nas/README.md`](nas/README.md)
+- 社区包二进制带版本后缀（`ffmpeg7`/`ffprobe7`），套件启动时会建 shim 软链给服务端用；细节见 [`nas/README.md`](nas/README.md)
 
 ## 更新记录
 
