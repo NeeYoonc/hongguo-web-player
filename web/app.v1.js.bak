@@ -1,0 +1,1152 @@
+'use strict';
+
+const SOURCE = 'hongguo';
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  category: '',
+  query: '',
+  page: 1,
+  items: [],
+  hasMore: false,
+  loading: false,
+  categories: [],
+  drama: null,
+  chapters: [],
+  index: 0,
+  plan: null,
+  qualities: [],
+  quality: 0,
+  videoTime: 0,
+  watched: {},
+};
+
+/* ---------------- 基础工具 ---------------- */
+
+async function api(payload) {
+  const res = await fetch('/api', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error('服务返回异常');
+  }
+  if (!data.ok) throw new Error(data.error || '请求失败');
+  return data.data;
+}
+
+function proxyURL(url) {
+  const m = /^http:\/\/127\.0\.0\.1:(\d+)(\/.*)$/.exec(url || '');
+  return m ? `/rs/${m[1]}${m[2]}` : url;
+}
+
+// clog：把前端关键步骤与异常发回服务端日志（/clientlog），方便在 NAS 上排查。
+// URL 带 ?debug=1 时同时在页面左下角显示最近 12 条，便于截图定位。
+const SELFTEST = location.search.indexOf('selftest=1') >= 0;
+// 自检自动播放需要静音（浏览器自动播放策略）；用户一旦有点击/按键，后续剧集恢复声音。
+let userActivated = false;
+['pointerdown', 'keydown', 'touchstart'].forEach(function (ev) {
+  window.addEventListener(ev, function () { userActivated = true; }, { capture: true, passive: true });
+});
+const DEBUG = location.search.indexOf('debug=1') >= 0 || SELFTEST;
+const debugLines = [];
+function debugPanel(msg) {
+  if (!DEBUG) return;
+  let box = document.getElementById('debug-box');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'debug-box';
+    box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;max-width:70vw;max-height:38vh;overflow:auto;background:rgba(0,0,0,.82);color:#7fe3a1;font:11px/1.5 ui-monospace,Menlo,monospace;padding:8px 10px;border-radius:8px;white-space:pre-wrap;pointer-events:none';
+    document.body.appendChild(box);
+  }
+  debugLines.push(new Date().toTimeString().slice(0, 8) + '  ' + msg);
+  while (debugLines.length > 12) debugLines.shift();
+  box.textContent = debugLines.join('\n');
+}
+function clog(msg) {
+  const text = String(msg);
+  try { console.log('[hg]', text); } catch (e) { /* ignore */ }
+  debugPanel(text);
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/clientlog', JSON.stringify({ t: Date.now(), msg: text }));
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function escapeHTML(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function coverURL(drama) {
+  const cover = (drama && drama.cover) || '';
+  const m = /\/novel-pic\/([0-9a-fA-F]+)~/.exec(cover);
+  if (m) return `https://p3-novel.byteimg.com/novel-pic/${m[1]}~tplv-shrink:640:0.image`;
+  return cover;
+}
+
+let toastTimer = 0;
+function toast(message, ms = 2600) {
+  const el = $('toast');
+  el.textContent = message;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+
+function progressKey(id) { return 'hg:progress:' + id; }
+function loadProgress(id) {
+  try { return JSON.parse(localStorage.getItem(progressKey(id)) || 'null'); } catch (e) { return null; }
+}
+function saveProgress(id, index, time) {
+  try {
+    localStorage.setItem(progressKey(id), JSON.stringify({ index, time, ts: Date.now() }));
+    state.watched[id] = index;
+  } catch (e) { /* ignore */ }
+}
+
+/* ---------------- 分类 ---------------- */
+
+async function loadCategories() {
+  try {
+    const data = await api({ action: 'categories', source: SOURCE });
+    state.categories = data.items || [];
+    renderChips();
+  } catch (e) {
+    /* 分类失败不影响浏览 */
+  }
+}
+
+function renderChips() {
+  $('chips').innerHTML = state.categories.map((item) => {
+    const active = !state.query && item.id === state.category ? ' active' : '';
+    return `<button class="chip${active}" data-cat="${escapeHTML(item.id)}">${escapeHTML(item.name)}</button>`;
+  }).join('');
+}
+
+/* ---------------- 列表 ---------------- */
+
+async function loadCatalog({ reset = false } = {}) {
+  if (state.loading) return;
+  state.loading = true;
+  if (reset) {
+    state.page = 1;
+    state.items = [];
+    $('grid').innerHTML = '';
+  }
+  $('more').disabled = true;
+  try {
+    const data = await api({
+      action: 'catalog',
+      source: SOURCE,
+      category: state.query ? '' : state.category,
+      page: state.page,
+      query: state.query,
+    });
+    const items = data.items || [];
+    state.items = reset ? items : state.items.concat(items);
+    state.hasMore = !!data.hasMore;
+    if (data.warning) toast(data.warning);
+    renderGrid();
+    if (SELFTEST) runSelftest();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.loading = false;
+    $('more').disabled = false;
+  }
+}
+
+function renderGrid() {
+  $('grid').innerHTML = state.items.map((drama) => {
+    const src = coverURL(drama);
+    const cover = src
+      ? `<img loading="lazy" src="${escapeHTML(src)}" alt="" onerror="this.remove()">`
+      : '';
+    const eps = drama.episodes ? `<span class="badge">${escapeHTML(drama.episodes)} 集</span>` : '';
+    const vip = drama.vip ? '<span class="badge vip">VIP</span>' : '';
+    const sub = [drama.category, drama.heat].filter(Boolean).map(escapeHTML).join(' · ');
+    return `<div class="card" data-id="${escapeHTML(drama.id)}">
+      <div class="cover-wrap">${cover}${eps}${vip}</div>
+      <h3>${escapeHTML(drama.title || '')}</h3>
+      <div class="sub">${sub}</div>
+    </div>`;
+  }).join('');
+  $('empty').hidden = state.items.length > 0;
+  $('more').hidden = !state.hasMore;
+  $('reset-search').hidden = !state.query;
+}
+
+function findDrama(id) {
+  return state.items.find((item) => item.id === id) || null;
+}
+
+/* ---------------- 详情 ---------------- */
+
+async function openDetail(drama) {
+  state.drama = drama;
+  state.chapters = [];
+  $('detail').hidden = false;
+  $('d-title').textContent = drama.title || '';
+  $('d-cover').src = coverURL(drama);
+  $('d-desc').textContent = drama.description || '';
+  $('d-meta').innerHTML = [
+    drama.category ? `<span class="tag">${escapeHTML(drama.category)}</span>` : '',
+    drama.episodes ? `<span class="tag">${escapeHTML(drama.episodes)} 集</span>` : '',
+    drama.heat ? `<span class="tag">${escapeHTML(drama.heat)}</span>` : '',
+    drama.vip ? '<span class="tag">VIP</span>' : '',
+  ].filter(Boolean).join('');
+  $('d-play').disabled = true;
+  $('d-play').textContent = '加载中…';
+  $('d-chapters').innerHTML = '';
+  try {
+    const data = await api({ action: 'detail', source: SOURCE, drama });
+    state.drama = Object.assign({}, drama, data.drama || {});
+    state.chapters = data.chapters || [];
+    clog('detail ok chapters=' + state.chapters.length);
+    if (data.warning) toast(data.warning);
+    renderDetail();
+  } catch (e) {
+    clog('detail 失败: ' + e.message);
+    toast(e.message);
+    $('d-play').disabled = false;
+    $('d-play').textContent = '重试';
+  }
+}
+
+function renderDetail() {
+  const saved = loadProgress(state.drama.id);
+  const startIndex = saved && saved.index < state.chapters.length ? saved.index : 0;
+  $('d-play').disabled = state.chapters.length === 0;
+  $('d-play').textContent = saved ? `继续看第 ${startIndex + 1} 集` : '开始播放';
+  $('d-play').dataset.index = String(startIndex);
+  $('d-chapters').innerHTML = state.chapters.map((chapter, index) => {
+    const watched = saved && index < saved.index ? ' watched' : '';
+    return `<button class="chapter${watched}" data-index="${index}">${escapeHTML(chapter.title || '第' + (index + 1) + '集')}</button>`;
+  }).join('');
+}
+
+/* ---------------- 播放器 ---------------- */
+
+
+/* ---------------- 播放内核（解密 / 转码适配） ---------------- */
+
+const HEVC_MIME = 'video/mp4; codecs="hvc1.1.6.L93.B0"';
+const MSE_CODECS = [
+  'video/mp4; codecs="avc1.42C01F,mp4a.40.2"',
+  'video/mp4; codecs="avc1.42E01F,mp4a.40.2"',
+  'video/mp4; codecs="avc1.4D401F,mp4a.40.2"',
+  'video/mp4; codecs="avc1.64001F,mp4a.40.2"',
+];
+
+function mseMime() {
+  if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported) return MSE_CODECS[1];
+  for (let i = 0; i < MSE_CODECS.length; i += 1) {
+    if (MediaSource.isTypeSupported(MSE_CODECS[i])) return MSE_CODECS[i];
+  }
+  return MSE_CODECS[1];
+}
+
+function hevcSupported() {
+  try {
+    const probe = document.createElement('video');
+    const type = probe.canPlayType(HEVC_MIME);
+    return type === 'probably' || type === 'maybe';
+  } catch (e) {
+    return false;
+  }
+}
+
+function planStream(plan) {
+  const m = /^http:\/\/127\.0\.0\.1:(\d+)(\/.*)$/.exec(plan.url || '');
+  if (!m) return null;
+  const chapter = state.chapters[state.index] || {};
+  const cacheId = (chapter.id || '') + ':' + (plan.quality || 0);
+  return { port: m[1], path: m[2], key: plan.decryptionKey || '', id: cacheId };
+}
+
+function streamQuery(stream) {
+  return 'port=' + stream.port + '&path=' + encodeURIComponent(stream.path) +
+    '&key=' + stream.key + '&id=' + encodeURIComponent(stream.id || '');
+}
+
+async function probeStream(stream) {
+  const res = await fetch('/probe?' + streamQuery(stream));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || '探测失败');
+  return data;
+}
+
+const playerState = { mode: '', token: 0, mse: null, stream: null };
+
+// MseStream：把服务端实时转码出来的 H.264 fMP4 喂给 MediaSource。
+// 拖动到未缓冲区间时，销毁并重建 MediaSource，从目标时间重新请求转码。
+function MseStream(video, stream, handlers) {
+  this.video = video;
+  this.stream = stream;
+  this.handlers = handlers || {};
+  this.ms = null;
+  this.sb = null;
+  this.abort = null;
+  this.queue = [];
+  this.ended = false;
+  this.gen = 0;
+  this.pendingSeek = null;
+  this.duration = 0;
+  this.onSeeking = this.handleSeeking.bind(this);
+  video.addEventListener('seeking', this.onSeeking);
+}
+
+MseStream.prototype.load = function (startTime, duration) {
+  this.duration = duration || 0;
+  this.startAt(startTime || 0);
+};
+
+MseStream.prototype.tcURL = function (start) {
+  return '/tc?' + streamQuery(this.stream) + '&start=' + start.toFixed(3) + '&h=720';
+};
+
+MseStream.prototype.startAt = function (startTime) {
+  const self = this;
+  self.stop();
+  const gen = ++self.gen;
+  const ms = new MediaSource();
+  self.ms = ms;
+  ms.addEventListener('sourceopen', function () {
+    clog('mse sourceopen gen=' + gen + '/' + self.gen);
+    if (gen !== self.gen) return;
+    if (self.duration > 0) { try { ms.duration = self.duration; } catch (e) { /* ignore */ } }
+    let sb;
+    try {
+      sb = ms.addSourceBuffer(mseMime());
+    } catch (e) {
+      clog('mse addSourceBuffer 失败: ' + ((e && e.message) || e) + ' mime=' + mseMime());
+      self.fail(e);
+      return;
+    }
+    clog('mse addSourceBuffer ok ' + mseMime());
+    sb.mode = 'segments';
+    sb.timestampOffset = startTime;
+    self.sb = sb;
+    sb.addEventListener('updateend', function () {
+      self.pump();
+      self.applyPendingSeek();
+    });
+    self.pendingSeek = startTime;
+    self.fetch(startTime, gen);
+  });
+  const url = URL.createObjectURL(ms);
+  self.video.src = url;
+  self.video.play().catch(function () { /* 忽略自动播放限制 */ });
+};
+
+MseStream.prototype.stop = function () {
+  if (this.abort) { try { this.abort.abort(); } catch (e) { /* ignore */ } this.abort = null; }
+  this.queue = [];
+  this.sb = null;
+  this.ms = null;
+  const src = this.video.src;
+  if (src && src.indexOf('blob:') === 0) { try { URL.revokeObjectURL(src); } catch (e) { /* ignore */ } }
+  this.video.removeAttribute('src');
+  try { this.video.load(); } catch (e) { /* ignore */ }
+};
+
+MseStream.prototype.destroy = function () {
+  this.gen += 1;
+  this.video.removeEventListener('seeking', this.onSeeking);
+  this.stop();
+};
+
+MseStream.prototype.fail = function (err) {
+  if (this.handlers.onError) this.handlers.onError(err);
+};
+
+MseStream.prototype.pump = function () {
+  const sb = this.sb;
+  if (!sb || sb.updating) return;
+  if (this.queue.length) {
+    const chunk = this.queue.shift();
+    if (!this._firstAppend) { this._firstAppend = true; clog('mse 首个数据块 ' + chunk.byteLength + 'B'); }
+    try {
+      sb.appendBuffer(chunk);
+    } catch (e) {
+      this.fail(e);
+    }
+    return;
+  }
+  if (this.ended && this.ms && this.ms.readyState === 'open') {
+    try { this.ms.endOfStream(); } catch (e) { /* ignore */ }
+  }
+};
+
+MseStream.prototype.applyPendingSeek = function () {
+  if (this.pendingSeek == null) return;
+  const target = this.pendingSeek;
+  const ranges = this.video.buffered;
+  for (let i = 0; i < ranges.length; i += 1) {
+    if (target >= ranges.start(i) - 0.5 && target <= ranges.end(i)) {
+      this.pendingSeek = null;
+      try { this.video.currentTime = target; } catch (e) { /* ignore */ }
+      return;
+    }
+  }
+};
+
+MseStream.prototype.fetch = function (start, gen) {
+  const self = this;
+  const ctrl = new AbortController();
+  self.abort = ctrl;
+  fetch(self.tcURL(start), { signal: ctrl.signal }).then(function (res) {
+    if (!res.ok || !res.body) throw new Error('转码请求失败 HTTP ' + res.status);
+    const reader = res.body.getReader();
+    function read() {
+      return reader.read().then(function (result) {
+        if (gen !== self.gen) return;
+        if (result.done) {
+          self.ended = true;
+          self.pump();
+          return;
+        }
+        self.queue.push(result.value);
+        self.pump();
+        return read();
+      });
+    }
+    return read();
+  }).catch(function (err) {
+    if (err && err.name === 'AbortError') return;
+    if (gen === self.gen) self.fail(err);
+  });
+};
+
+MseStream.prototype.handleSeeking = function () {
+  if (!this.sb) return;
+  const video = this.video;
+  const t = video.currentTime;
+  if (!isFinite(t)) return;
+  const ranges = video.buffered;
+  for (let i = 0; i < ranges.length; i += 1) {
+    if (t >= ranges.start(i) - 0.3 && t <= ranges.end(i) - 0.5) return;
+  }
+  this.startAt(t);
+};
+
+function teardownPlayer() {
+  const video = $('video');
+  if (playerState.mse) { playerState.mse.destroy(); playerState.mse = null; }
+  video.onloadedmetadata = null;
+  video.pause();
+  video.removeAttribute('src');
+  try { video.load(); } catch (e) { /* ignore */ }
+  playerState.mode = '';
+  playerState.stream = null;
+}
+
+function directState(tag) {
+  const video = $('video');
+  let buf = '';
+  try {
+    for (let i = 0; i < video.buffered.length; i += 1) {
+      buf += video.buffered.start(i).toFixed(1) + '-' + video.buffered.end(i).toFixed(1) + ' ';
+    }
+  } catch (e) { /* ignore */ }
+  clog('direct ' + tag + ': rs=' + video.readyState + ' ns=' + video.networkState +
+    ' paused=' + video.paused + ' err=' + (video.error && video.error.code) +
+    ' dur=' + video.duration + ' t=' + video.currentTime.toFixed(1) + ' buf=[' + buf + ']');
+}
+
+function playDirect(stream, startTime, token) {
+  const video = $('video');
+  clog('direct 模式 src=/dec?port=' + stream.port + ' start=' + startTime.toFixed(1));
+  playerState.mode = 'direct';
+  video.controls = false;
+  if (SELFTEST && !userActivated) video.muted = true; // 自检自动起播需静音，用户交互后恢复声音
+  video.onloadedmetadata = function () {
+    clog('direct loadedmetadata dur=' + video.duration);
+    dmLoad(token);
+    if (startTime > 0 && isFinite(video.duration)) {
+      video.currentTime = Math.min(startTime, Math.max(0, video.duration - 1));
+    }
+  };
+  video.onloadeddata = function () { clog('direct loadeddata'); };
+  video.oncanplay = function () { clog('direct canplay'); };
+  video.onstalled = function () { clog('direct stalled'); };
+  video.src = '/dec?' + streamQuery(stream) + '&v=' + token;
+  video.play().then(function () {
+    clog('direct play() resolved');
+  }).catch(function (e) {
+    clog('direct play() rejected: ' + ((e && e.name) || '') + ' ' + ((e && e.message) || e));
+    $('p-loading').hidden = true;
+    toast('浏览器要求先点击视频才能播放，点一下画面中间的播放按钮');
+  });
+  setTimeout(function () { directState('3s'); }, 3000);
+  setTimeout(function () { directState('8s'); }, 8000);
+}
+
+async function startMse(stream, startTime, token) {
+  let duration = 0;
+  clog('mse 模式 开始 probe');
+  try {
+    duration = (await probeStream(stream)).duration || 0;
+    clog('mse probe ok duration=' + duration);
+  } catch (e) {
+    clog('mse probe 失败: ' + ((e && e.message) || e));
+  }
+  if (token !== playerState.token) return;
+  const video = $('video');
+  playerState.mode = 'mse';
+  video.controls = false;
+  if (SELFTEST && !userActivated) video.muted = true;
+  playerState.mse = new MseStream(video, stream, {
+    onError(err) {
+      if (token !== playerState.token) return;
+      $('p-loading').hidden = true;
+      showPlayerError('转码播放失败：' + ((err && err.message) || err), true);
+    },
+  });
+  playerState.mse.load(startTime, duration);
+  dmLoad(token);
+}
+
+let playGeneration = 0;
+
+async function playEpisode(index, { quality = 0, keepTime = false, startTime = 0 } = {}) {
+  const chapter = state.chapters[index];
+  if (!chapter) return;
+  const generation = ++playGeneration;
+  const previousTime = startTime > 0 ? startTime : (keepTime ? state.videoTime : 0);
+  if (state.plan && state.plan.session) {
+    api({ action: 'release', session: state.plan.session }).catch(() => {});
+  }
+  state.plan = null;
+  state.index = index;
+  state.videoTime = 0;
+  clog('playEpisode index=' + index + ' q=' + quality + ' start=' + previousTime.toFixed(1));
+  $('detail').hidden = true;
+  $('player').hidden = false;
+  $('p-loading').hidden = false;
+  $('p-ctrls').classList.remove('hide');
+  $('p-error').hidden = true;
+  $('p-title').textContent = state.drama.title || '';
+  $('p-sub').textContent = chapter.title || `第 ${index + 1} 集`;
+  renderPlayerChapters();
+  try {
+    const plan = await api({
+      action: 'resolve',
+      source: SOURCE,
+      drama: state.drama,
+      chapter,
+      index,
+      quality,
+    });
+    if (generation !== playGeneration) {
+      api({ action: 'release', session: plan.session }).catch(() => {});
+      return;
+    }
+    state.plan = plan;
+    state.qualities = plan.qualities || [];
+    state.quality = plan.quality || 0;
+    clog('resolve ok q=' + plan.quality + ' url=' + String(plan.url).slice(0, 50) + ' keylen=' + String(plan.decryptionKey || '').length);
+    await applyPlan(plan, previousTime);
+  } catch (e) {
+    if (generation !== playGeneration) return;
+    clog('resolve 失败: ' + ((e && e.message) || e));
+    $('p-loading').hidden = true;
+    showPlayerError(e.message, false);
+  }
+}
+
+async function applyPlan(plan, startTime) {
+  try {
+    const token = ++playerState.token;
+    teardownPlayer();
+    state.videoTime = startTime || 0;
+    renderQuality();
+    $('p-error').hidden = true;
+    $('p-loading').hidden = false;
+    const stream = planStream(plan);
+    if (!stream || !stream.key) {
+      clog('applyPlan: 播放信息不完整 url=' + String(plan && plan.url).slice(0, 60));
+      $('p-loading').hidden = true;
+      showPlayerError('播放信息不完整，试试换一条线路。', true);
+      return;
+    }
+    playerState.stream = stream;
+    const hevc = hevcSupported();
+    clog('applyPlan: hevc=' + hevc + ' q=' + (plan.quality || 0) + ' stream=' + stream.port + stream.path.slice(0, 24));
+    if (hevc) {
+      playDirect(stream, startTime || 0, token);
+      return;
+    }
+    await startMse(stream, startTime || 0, token);
+  } catch (e) {
+    clog('applyPlan 异常: ' + ((e && e.message) || e));
+    $('p-loading').hidden = true;
+    showPlayerError('播放初始化失败：' + ((e && e.message) || e), true);
+  }
+}
+
+function renderQuality() {
+  const select = $('p-quality');
+  const current = state.quality || state.plan && state.plan.quality || 0;
+  const list = (state.qualities || []).slice().sort((a, b) => b - a);
+  if (!list.length) {
+    select.innerHTML = '<option>自动</option>';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = list.map((q) => {
+    const label = q >= 1080 ? '1080P' : q + 'P';
+    return `<option value="${q}"${q === current ? ' selected' : ''}>${label}</option>`;
+  }).join('');
+}
+
+function renderPlayerChapters() {
+  $('p-chapters').innerHTML = state.chapters.map((chapter, index) => {
+    const active = index === state.index ? ' active' : '';
+    return `<button class="chapter${active}" data-index="${index}">${escapeHTML(chapter.title || index + 1)}</button>`;
+  }).join('');
+  const active = $('p-chapters').querySelector('.chapter.active');
+  if (active) active.scrollIntoView({ block: 'nearest', inline: 'center' });
+}
+
+function showPlayerError(message, canFallback) {
+  $('p-error-text').textContent = message;
+  $('p-fallback').hidden = !canFallback;
+  $('p-error').hidden = false;
+}
+
+async function fallback() {
+  if (!state.plan || !state.plan.session) return;
+  $('p-error').hidden = true;
+  $('p-loading').hidden = false;
+  const keep = state.videoTime;
+  try {
+    const plan = await api({ action: 'fallback', session: state.plan.session });
+    state.plan = plan;
+    state.qualities = plan.qualities || state.qualities;
+    state.quality = plan.quality || state.quality;
+    applyPlan(plan, keep);
+  } catch (e) {
+    $('p-loading').hidden = true;
+    showPlayerError(e.message, false);
+  }
+}
+
+function closePlayer() {
+  playGeneration += 1;
+  dmItems = [];
+  dmIndex = 0;
+  dmClear();
+  if (state.plan && state.plan.session) {
+    api({ action: 'release', session: state.plan.session }).catch(() => {});
+  }
+  state.plan = null;
+  teardownPlayer();
+  $('player').hidden = true;
+  $('p-error').hidden = true;
+  $('p-loading').hidden = true;
+}
+
+function nextEpisode() {
+  if (state.index + 1 < state.chapters.length) {
+    playEpisode(state.index + 1, { quality: state.quality });
+  } else {
+    toast('已经是最后一集了');
+  }
+}
+
+function prevEpisode() {
+  if (state.index > 0) {
+    playEpisode(state.index - 1, { quality: state.quality });
+  } else {
+    toast('已经是第一集了');
+  }
+}
+
+/* ---------------- 弹幕 ---------------- */
+
+const DM_KEY = 'hg:danmaku';
+const dm = Object.assign({ on: true, opacity: 90, size: 18, speed: 100, area: 'full' }, (function () {
+  try { return JSON.parse(localStorage.getItem(DM_KEY) || '{}') || {}; } catch (e) { return {}; }
+})());
+
+let dmItems = [];
+let dmIndex = 0;
+let dmLastTime = 0;
+let dmLaneNext = [];
+let dmLoadedToken = -1;
+
+function dmSave() {
+  try { localStorage.setItem(DM_KEY, JSON.stringify(dm)); } catch (e) { /* ignore */ }
+}
+
+function dmApplyStyle() {
+  const layer = $('p-danmaku');
+  if (!layer) return;
+  layer.style.opacity = String(dm.opacity / 100);
+  layer.classList.toggle('off', !dm.on);
+  layer.classList.remove('area-top', 'area-bottom');
+  if (dm.area === 'top') layer.classList.add('area-top');
+  if (dm.area === 'bottom') layer.classList.add('area-bottom');
+}
+
+function dmClear() {
+  const layer = $('p-danmaku');
+  if (layer) layer.innerHTML = '';
+  dmLastTime = 0;
+  dmLaneNext = [];
+}
+
+function dmReset(toMs) {
+  dmClear();
+  dmIndex = 0;
+  while (dmIndex < dmItems.length && dmItems[dmIndex].timeMs < toMs) dmIndex += 1;
+  dmLastTime = toMs / 1000;
+}
+
+async function dmLoad(token) {
+  dmItems = [];
+  dmIndex = 0;
+  dmClear();
+  if (!dm.on || !state.plan || !state.plan.session) return;
+  dmLoadedToken = token;
+  const session = state.plan.session;
+  const video = $('video');
+  const end = Math.max(60000, Math.ceil((isFinite(video.duration) && video.duration > 0 ? video.duration : 300) * 1000));
+  const seen = {};
+  let start = 0;
+  try {
+    for (let i = 0; i < 8 && start < end; i += 1) {
+      const page = await api({ action: 'danmaku', playbackSession: session, startMs: start, durationMs: end });
+      if (token !== playerState.token) return;
+      const items = page.items || [];
+      items.forEach(function (item) {
+        if (!seen[item.id]) { seen[item.id] = 1; dmItems.push(item); }
+      });
+      if (!items.length) break;
+      const next = Number(page.nextMs) || 0;
+      if (next <= start) break;
+      start = next;
+    }
+    dmItems.sort(function (a, b) { return a.timeMs - b.timeMs; });
+    clog('danmaku 加载 ' + dmItems.length + ' 条');
+    dmReset(Math.max(0, ($('video').currentTime || 0) * 1000));
+  } catch (e) {
+    clog('danmaku 失败: ' + ((e && e.message) || e));
+  }
+}
+
+function dmSpawn(text) {
+  const layer = $('p-danmaku');
+  if (!layer) return;
+  const stageW = layer.clientWidth || 800;
+  const laneH = Math.max(20, Math.round(dm.size * 1.5));
+  const laneCount = Math.max(3, Math.min(12, Math.floor((layer.clientHeight - 6) / laneH) || 3));
+  const el = document.createElement('span');
+  el.className = 'dm';
+  el.textContent = text;
+  el.style.fontSize = dm.size + 'px';
+  layer.appendChild(el);
+  const textW = el.offsetWidth || text.length * dm.size;
+  const dist = stageW + textW;
+  const travel = Math.max(2, 8 * (100 / Math.max(50, dm.speed)) * (dist / Math.max(1, stageW)));
+  el.style.setProperty('--dm-dist', (-dist) + 'px');
+  el.style.setProperty('--dm-dur', travel.toFixed(2) + 's');
+  const now = performance.now();
+  let lane = 0;
+  let best = Infinity;
+  for (let i = 0; i < laneCount; i += 1) {
+    const t = dmLaneNext[i] || 0;
+    if (t <= now) { lane = i; best = -1; break; }
+    if (t < best) { best = t; lane = i; }
+  }
+  dmLaneNext[lane] = now + Math.max(350, travel * 1000 * (textW / dist) * 0.6);
+  el.style.top = (lane * laneH + 4) + 'px';
+  el.addEventListener('animationend', function () { el.remove(); });
+}
+
+function dmTick() {
+  const layer = $('p-danmaku');
+  const video = $('video');
+  if (!layer || $('player').hidden) return;
+  if (!dm.on) return;
+  layer.classList.toggle('paused', video.paused);
+  if (video.paused) { dmLastTime = video.currentTime; return; }
+  const now = video.currentTime;
+  if (now < dmLastTime - 1.5 || now > dmLastTime + 6) { dmReset(now * 1000); return; }
+  while (dmIndex < dmItems.length && dmItems[dmIndex].timeMs <= now * 1000) {
+    const item = dmItems[dmIndex];
+    dmIndex += 1;
+    if (item.timeMs >= dmLastTime * 1000 - 1500) dmSpawn(item.text);
+  }
+  dmLastTime = now;
+}
+
+function dmSyncSettings() {
+  $('dm-on').checked = !!dm.on;
+  $('dm-opacity').value = String(dm.opacity);
+  $('dm-size').value = String(dm.size);
+  $('dm-speed').value = String(dm.speed);
+  $('dm-area').value = dm.area;
+}
+
+/* ---------------- 自定义播放控制条 ---------------- */
+
+let seekDragging = false;
+let volDragging = false;
+let lastActivity = Date.now();
+
+function fmtTime(sec) {
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function showControls(force) {
+  const bar = $('p-ctrls');
+  if (!bar) return;
+  lastActivity = Date.now();
+  if (bar.classList.contains('hide')) {
+    bar.classList.remove('hide');
+    clog('ctrls show');
+  }
+  if (force) lastActivity = Date.now();
+}
+
+function hideControls() {
+  const bar = $('p-ctrls');
+  if (!bar) return;
+  if (!bar.classList.contains('hide')) {
+    bar.classList.add('hide');
+    clog('ctrls hide');
+  }
+}
+
+// 播放中 3 秒无操作自动隐藏控制条（鼠标悬停在控制条上时保持显示）
+function startControlsWatcher() {
+  setInterval(function () {
+    if ($('player').hidden) return;
+    const bar = $('p-ctrls');
+    const video = $('video');
+    if (!bar) return;
+    if (bar.matches(':hover')) { lastActivity = Date.now(); return; }
+    if (video.paused || seekDragging || volDragging) return;
+    if (Date.now() - lastActivity > 3000) hideControls();
+  }, 400);
+}
+
+function syncProgress() {
+  const video = $('video');
+  const seek = $('p-seek');
+  if (!seek) return;
+  const dur = isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+  $('p-dur').textContent = dur ? fmtTime(dur) : '0:00';
+  if (!seekDragging) {
+    $('p-time').textContent = fmtTime(video.currentTime);
+    if (dur) seek.value = String(Math.round((video.currentTime / dur) * 1000));
+  }
+  $('p-play').textContent = video.paused ? '▶' : '⏸';
+  const muted = video.muted || video.volume === 0;
+  $('p-mute').textContent = muted ? '🔇' : (video.volume > 0.6 ? '🔊' : '🔉');
+  const vol = $('p-vol');
+  if (vol && !volDragging) vol.value = String(Math.round(video.volume * 100));
+  $('p-vol-label').textContent = Math.round(video.volume * 100) + '%';
+}
+
+function togglePlay() {
+  const video = $('video');
+  if (video.paused) video.play().catch(function () {});
+  else video.pause();
+  showControls(true);
+  syncProgress();
+}
+
+function seekTo(t) {
+  const video = $('video');
+  if (!isFinite(video.duration) || video.duration <= 0) return;
+  video.currentTime = Math.max(0, Math.min(t, video.duration - 0.3));
+  syncProgress();
+}
+
+function toggleMute() {
+  const video = $('video');
+  video.muted = !video.muted;
+  syncProgress();
+  showControls(true);
+}
+
+function toggleFullscreen() {
+  const player = $('player');
+  if (document.fullscreenElement) {
+    if (document.exitFullscreen) document.exitFullscreen().catch(function () {});
+  } else if (player.requestFullscreen) {
+    player.requestFullscreen().catch(function () {});
+  } else {
+    toast('当前浏览器不支持全屏');
+  }
+}
+
+/* ---------------- 事件绑定 ---------------- */
+
+function bindEvents() {
+  $('search-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    state.query = $('search-input').value.trim();
+    loadCatalog({ reset: true });
+  });
+
+  $('reset-search').addEventListener('click', () => {
+    state.query = '';
+    $('search-input').value = '';
+    loadCatalog({ reset: true });
+    renderChips();
+  });
+
+  $('chips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.query = '';
+    $('search-input').value = '';
+    state.category = chip.dataset.cat || '';
+    renderChips();
+    loadCatalog({ reset: true });
+  });
+
+  $('grid').addEventListener('click', (event) => {
+    const card = event.target.closest('.card');
+    clog('点击卡片: ' + (card ? card.dataset.id : '非卡片区域'));
+    if (!card) return;
+    const drama = findDrama(card.dataset.id);
+    clog('卡片匹配: ' + (drama ? drama.title : '未找到'));
+    if (drama) openDetail(drama);
+  });
+
+  $('more').addEventListener('click', () => {
+    state.page += 1;
+    loadCatalog();
+  });
+
+  $('detail').addEventListener('click', (event) => {
+    if (event.target === $('detail')) $('detail').hidden = true;
+    const closer = event.target.closest('[data-close="detail"]');
+    if (closer) $('detail').hidden = true;
+  });
+
+  $('d-chapters').addEventListener('click', (event) => {
+    const button = event.target.closest('.chapter');
+    if (!button) return;
+    playEpisode(Number(button.dataset.index));
+  });
+
+  $('d-play').addEventListener('click', (event) => {
+    const index = Number(event.currentTarget.dataset.index || 0);
+    clog('点击开始播放 index=' + index + ' chapters=' + state.chapters.length);
+    const saved = state.drama ? loadProgress(state.drama.id) : null;
+    const startTime = saved && saved.index === index ? saved.time || 0 : 0;
+    playEpisode(index, { startTime });
+  });
+
+  $('p-back').addEventListener('click', () => {
+    closePlayer();
+    $('detail').hidden = false;
+  });
+  $('p-close').addEventListener('click', closePlayer);
+  $('p-prev').addEventListener('click', prevEpisode);
+  $('p-next').addEventListener('click', nextEpisode);
+  $('p-fallback').addEventListener('click', fallback);
+  $('p-dm').addEventListener('click', function () {
+    const panel = $('dm-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) dmSyncSettings();
+  });
+  $('dm-on').addEventListener('change', function (e) {
+    dm.on = e.target.checked;
+    dmSave();
+    dmApplyStyle();
+    if (dm.on) dmLoad(playerState.token);
+    else { dmItems = []; dmIndex = 0; dmClear(); }
+  });
+  $('dm-opacity').addEventListener('input', function (e) { dm.opacity = Number(e.target.value); dmSave(); dmApplyStyle(); });
+  $('dm-size').addEventListener('input', function (e) { dm.size = Number(e.target.value); dmSave(); });
+  $('dm-speed').addEventListener('input', function (e) { dm.speed = Number(e.target.value); dmSave(); });
+  $('dm-area').addEventListener('change', function (e) { dm.area = e.target.value; dmSave(); dmApplyStyle(); });
+  setInterval(dmTick, 200);
+  $('p-play').addEventListener('click', togglePlay);
+  $('p-mute').addEventListener('click', toggleMute);
+  $('p-full').addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', function () { showControls(true); });
+  document.addEventListener('webkitfullscreenchange', function () { showControls(true); });
+  $('p-ctrls').addEventListener('pointerdown', function () { showControls(true); });
+  $('player').addEventListener('pointermove', function () { showControls(false); });
+  $('player').addEventListener('touchstart', function () { showControls(false); }, { passive: true });
+  startControlsWatcher();
+  $('player').addEventListener('pointerdown', function () { showControls(true); });
+
+  const seek = $('p-seek');
+  seek.addEventListener('pointerdown', function () { seekDragging = true; });
+  seek.addEventListener('input', function () {
+    const video = $('video');
+    if (!isFinite(video.duration) || video.duration <= 0) return;
+    $('p-time').textContent = fmtTime((Number(seek.value) / 1000) * video.duration);
+  });
+  seek.addEventListener('change', function () {
+    const video = $('video');
+    seekDragging = false;
+    if (!isFinite(video.duration) || video.duration <= 0) return;
+    seekTo((Number(seek.value) / 1000) * video.duration);
+  });
+  window.addEventListener('pointerup', function () { seekDragging = false; volDragging = false; });
+
+  const vol = $('p-vol');
+  vol.addEventListener('pointerdown', function () { volDragging = true; });
+  vol.addEventListener('input', function () {
+    const video = $('video');
+    const pct = Number(vol.value);
+    video.volume = pct / 100;
+    if (pct > 0 && video.muted) video.muted = false;
+    $('p-vol-label').textContent = pct + '%';
+    $('p-mute').textContent = pct === 0 ? '🔇' : (pct > 60 ? '🔊' : '🔉');
+    showControls(true);
+  });
+  vol.addEventListener('change', function () { volDragging = false; });
+
+  $('p-quality').addEventListener('change', (event) => {
+    const quality = Number(event.target.value) || 0;
+    playEpisode(state.index, { quality, keepTime: true });
+  });
+
+  $('p-chapters').addEventListener('click', (event) => {
+    const button = event.target.closest('.chapter');
+    if (!button) return;
+    playEpisode(Number(button.dataset.index), { quality: state.quality });
+  });
+
+  const video = $('video');
+  let progressAt = 0;
+  video.addEventListener('timeupdate', () => {
+    state.videoTime = video.currentTime;
+    syncProgress();
+    if (!state.drama) return;
+    const now = Date.now();
+    if (now - progressAt > 3000) {
+      progressAt = now;
+      saveProgress(state.drama.id, state.index, video.currentTime);
+    }
+  });
+  video.addEventListener('ended', () => {
+    if (!state.drama) return;
+    saveProgress(state.drama.id, state.index + 1, 0);
+    if ($('p-auto').checked) nextEpisode();
+  });
+  video.addEventListener('playing', () => {
+    clog('video playing t=' + video.currentTime.toFixed(1) + ' rs=' + video.readyState);
+    $('p-loading').hidden = true;
+    $('p-error').hidden = true;
+    showControls(false);
+    syncProgress();
+  });
+  video.addEventListener('loadedmetadata', syncProgress);
+  video.addEventListener('seeking', function () {
+    if (!dmItems.length) return;
+    dmReset(video.currentTime * 1000);
+  });
+  video.addEventListener('durationchange', syncProgress);
+  video.addEventListener('pause', () => { showControls(true); syncProgress(); });
+  video.addEventListener('play', () => { showControls(false); syncProgress(); });
+  video.addEventListener('volumechange', syncProgress);
+  video.addEventListener('click', togglePlay);
+  video.addEventListener('error', () => {
+    clog('video error code=' + (video.error && video.error.code) + ' msg=' + (video.error && video.error.message));
+    if (!video.getAttribute('src')) return;
+    if (playerState.mode === 'direct' && playerState.stream) {
+      // HEVC 探测误报或浏览器实际解不了 HEVC：自动改走服务端转码。
+      playerState.mode = '';
+      toast('浏览器不支持该视频格式，已切换到转码模式');
+      startMse(playerState.stream, state.videoTime, playerState.token);
+      return;
+    }
+    $('p-loading').hidden = true;
+    showPlayerError('播放失败：可能是该清晰度线路异常，试试切换清晰度或换一条线路。', true);
+  });
+
+  let stallTimer = 0;
+  video.addEventListener('waiting', () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      if (video.readyState < 3 && !video.paused) {
+        showPlayerError('线路响应较慢，可以点“换一条线路”重试。', true);
+      }
+    }, 15000);
+  });
+  video.addEventListener('playing', () => clearTimeout(stallTimer));
+  video.addEventListener('timeupdate', () => clearTimeout(stallTimer));
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      if (!$('player').hidden) closePlayer();
+      else if (!$('detail').hidden) $('detail').hidden = true;
+    }
+    if (!$('player').hidden) {
+      if (event.key === ' ') { event.preventDefault(); togglePlay(); }
+      if (event.key === 'ArrowRight') seekTo($('video').currentTime + 5);
+      if (event.key === 'ArrowLeft') seekTo($('video').currentTime - 5);
+      if (event.key === 'ArrowUp') { event.preventDefault(); $('video').volume = Math.min(1, $('video').volume + 0.1); }
+      if (event.key === 'ArrowDown') { event.preventDefault(); $('video').volume = Math.max(0, $('video').volume - 0.1); }
+      if (event.key === 'f' || event.key === 'F') toggleFullscreen();
+    }
+  });
+
+  let scrollLock = false;
+  window.addEventListener('scroll', () => {
+    if (scrollLock || !state.hasMore || state.loading) return;
+    if (window.innerHeight + window.scrollY < document.body.offsetHeight - 600) return;
+    scrollLock = true;
+    state.page += 1;
+    loadCatalog().finally(() => setTimeout(() => { scrollLock = false; }, 400));
+  });
+}
+
+/* ---------------- 自检（?selftest=1，自动播第一部剧，便于远程排查） ---------------- */
+
+let selftestRan = false;
+async function runSelftest() {
+  if (selftestRan || !state.items.length) return;
+  selftestRan = true;
+  clog('selftest: 自动打开 ' + state.items[0].id);
+  try {
+    await openDetail(state.items[0]);
+    clog('selftest: detail 完成 chapters=' + state.chapters.length);
+    if (state.chapters.length) {
+      await playEpisode(0, { startTime: 0 });
+      clog('selftest: playEpisode 返回');
+    }
+  } catch (e) {
+    clog('selftest 异常: ' + ((e && e.message) || e));
+  }
+}
+
+/* ---------------- 启动 ---------------- */
+
+window.addEventListener('unhandledrejection', (event) => {
+  const msg = (event.reason && event.reason.message) || String(event.reason);
+  clog('unhandledrejection: ' + msg);
+  toast('脚本错误：' + msg, 6000);
+});
+window.addEventListener('error', (event) => {
+  clog('window error: ' + (event.message || '') + ' @' + (event.filename || '') + ':' + (event.lineno || 0));
+});
+
+dmApplyStyle();
+clog('页面加载 v6 ' + location.href);
+bindEvents();
+loadCategories();
+loadCatalog({ reset: true });

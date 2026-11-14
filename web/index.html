@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0f">
+<title>红果短剧</title>
+<link rel="stylesheet" href="/style.css?v=110">
+  <link rel="icon" href="/assets/logo.png">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><img class="logo" src="/assets/logo.png" alt="红果短剧"><span class="brand-name">红果短剧</span><button class="side-toggle" id="btn-side-toggle" aria-label="收起侧栏" title="收起/展开侧栏">«</button></div>
+    <nav class="side-nav">
+      <div class="side-group">
+        <div class="side-title">发现</div>
+        <button class="side-item active" data-nav="recommend"><span class="ico">⌂</span>推荐</button>
+        <button class="side-item" data-nav="search"><span class="ico">⌕</span>找剧</button>
+        <button class="side-item" data-nav="rank"><span class="ico">☰</span>排行榜</button>
+        <button class="side-item" data-nav="new"><span class="ico">✦</span>新剧</button>
+      </div>
+      <div class="side-group">
+        <div class="side-title">我的</div>
+        <button class="side-item" data-nav="history"><span class="ico">◷</span>历史</button>
+        <button class="side-item" data-nav="fav"><span class="ico">♡</span>收藏</button>
+        <button class="side-item" data-nav="likes"><span class="ico">♥</span>点赞</button>
+        <button class="side-item" data-nav="reserve"><span class="ico">✧</span>追更·预约</button>
+      </div>
+    </nav>
+    <div class="side-bottom">
+      <div class="side-author">作者: NeeYoonc</div>
+      <div class="side-links">
+        <button class="side-item small" data-nav="feedback">反馈</button>
+        <button class="side-item small" data-nav="settings">设置</button>
+      </div>
+      <div class="side-user" id="side-user">
+        <span class="avatar" id="side-avatar">游</span>
+        <span class="side-user-name" id="side-user-name">游客 · 未登录</span>
+        <button class="side-login-btn" id="btn-login">登录</button>
+        <button class="side-logout-btn" id="btn-logout" hidden>退出</button>
+      </div>
+    </div>
+  </aside>
+    <div class="nav-backdrop" id="nav-backdrop" hidden></div>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="menu-btn" id="btn-menu" type="button" aria-label="菜单">☰</button>
+      <div class="page-title" id="page-title">推荐</div>
+      <div class="tabs" id="tabs">
+        <button class="tab" data-nav="follow">关注</button>
+        <button class="tab" data-cat="comic_series">漫剧</button>
+        <button class="tab" data-cat="short_play">真人剧</button>
+        <button class="tab active" data-cat="">推荐</button>
+      </div>
+      <div class="feed-hint" id="feed-hint" hidden></div>
+      <form id="search-form" class="search" autocomplete="off" hidden>
+        <div class="search-wrap">
+          <input id="search-input" type="search" placeholder="搜剧名 / 关键词" enterkeyhint="search" autocomplete="off">
+          <button type="submit">搜索</button>
+        </div>
+        <div id="search-pop" class="search-pop" hidden></div>
+      </form>
+    </header>
+
+    <section class="stage">
+      <div id="view-recommend" class="view view-recommend">
+<div id="player" class="player">
+        <div class="player-video">
+          <button class="fullview-btn" id="p-fullview" type="button">⛶ 全屏观看</button>
+        <video id="video" playsinline preload="metadata"></video>
+          <div id="p-danmaku" class="danmaku-layer" aria-hidden="true"></div>
+
+          <div class="player-top">
+            <button id="p-back" class="icon-btn" aria-label="返回">‹</button>
+            <div class="player-title">
+              <div id="p-title"></div>
+              <div id="p-sub" class="player-sub"></div>
+            </div>
+            <button id="p-close" class="icon-btn" aria-label="关闭">×</button>
+          </div>
+
+          <div id="p-loading" class="player-loading" hidden>正在取流…</div>
+          <div id="p-error" class="player-error" hidden>
+            <p id="p-error-text"></p>
+            <button id="p-fallback" class="primary" hidden>换一条线路</button>
+          </div>
+
+          <div class="player-rail">
+            <button class="rail-btn" id="r-like"><span class="rail-ico"><svg viewBox="0 0 24 24"><path d="M12 20.6S3.6 14.9 3.6 9.4A4.9 4.9 0 0 1 12 6.4a4.9 4.9 0 0 1 8.4 3c0 5.5-8.4 11.2-8.4 11.2z"/></svg></span><span class="rail-num" id="r-like-num">0</span></button>
+            <button class="rail-btn" id="r-comment"><span class="rail-ico"><svg viewBox="0 0 24 24"><path d="M20.5 11.6a8.4 8.4 0 0 1-8.4 8.4H7.4L3.5 23v-4.6a8.4 8.4 0 1 1 17-6.8z"/></svg></span><span class="rail-num" id="r-comment-num">0</span></button>
+            <button class="rail-btn" id="r-fav"><span class="rail-ico"><svg viewBox="0 0 24 24"><path d="M12 3.6l2.7 5.5 6 .9-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6-4.3-4.2 6-.9z"/></svg></span><span class="rail-num">收藏</span></button>
+            <button class="rail-btn" id="r-share"><span class="rail-ico"><svg viewBox="0 0 24 24"><path d="M13.5 4.5L21 12l-7.5 7.5V15C7 15 4.5 17 3 21.5 3 14 6 10 13.5 10z"/></svg></span><span class="rail-num">分享</span></button>
+            <button class="rail-btn" id="r-download"><span class="rail-ico"><svg viewBox="0 0 24 24"><path d="M12 3.5v11.5M12 15l-4.3-4.3M12 15l4.3-4.3M4.5 20h15"/></svg></span><span class="rail-num">下载</span></button>
+            <button class="rail-btn" id="r-dislike"><span class="rail-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg></span><span class="rail-num">不感兴趣</span></button>
+          </div>
+
+          <div class="player-meta" id="p-meta">
+            <div class="meta-author" id="p-author">@红果短剧</div>
+            <div class="meta-tags" id="p-tags"></div>
+            <div class="meta-episode" id="p-ep">第 1 集</div>
+            <p class="meta-desc" id="p-desc"></p>
+            <button class="meta-expand" id="p-expand">展开</button>
+          </div>
+
+          <div class="player-ctrls" id="p-ctrls">
+            <input id="p-seek" class="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="播放进度">
+            <div class="ctl-row">
+              <button id="p-play" class="icon-btn playing" aria-label="播放/暂停"><svg viewBox="0 0 24 24" class="i-play"><path d="M8 5.2v13.6L19 12z"/></svg><svg viewBox="0 0 24 24" class="i-pause"><path d="M6.5 5h3.6v14H6.5zM13.9 5h3.6v14h-3.6z"/></svg></button>
+              <span class="time" id="p-time">00:00</span><span class="time-sep">/</span><span class="time" id="p-dur">00:00</span>
+              <div class="ctl-right">
+                <button id="p-episodes" class="text-btn">选集·全 0 集</button>
+                <select id="p-quality" class="text-select"></select>
+                <select id="p-speed" class="text-select" aria-label="倍速">
+                  <option value="0.75">0.75x</option>
+                  <option value="1" selected>1.0x</option>
+                  <option value="1.25">1.25x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="2">2.0x</option>
+                </select>
+                <button id="p-dm" class="icon-btn" title="弹幕设置">弹</button>
+                <button id="p-mute" class="icon-btn" aria-label="静音"><svg viewBox="0 0 24 24" class="i-vol"><path d="M4 9.2v5.6h3.6l4.6 3.8V5.4L7.6 9.2z"/><path d="M16.4 8.8a4.6 4.6 0 0 1 0 6.4M18.8 6.4a7.8 7.8 0 0 1 0 11.2"/></svg><svg viewBox="0 0 24 24" class="i-mute"><path d="M4 9.2v5.6h3.6l4.6 3.8V5.4L7.6 9.2z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg></button>
+                <input id="p-vol" class="vol" type="range" min="0" max="100" value="100" aria-label="音量">
+                <span class="vol-label" id="p-vol-label">100%</span>
+                <button id="p-prev" class="icon-btn" title="上一集"><svg viewBox="0 0 24 24"><path d="M7 5.5v13"/><path d="M19 5.5v13L9.5 12z"/></svg></button>
+                <button id="p-next" class="icon-btn" title="下一集"><svg viewBox="0 0 24 24"><path d="M17 5.5v13"/><path d="M5 5.5v13L14.5 12z"/></svg></button>
+                <label class="auto-label"><input id="p-auto" type="checkbox" checked>自动连播</label>
+                <button id="p-full" class="icon-btn" aria-label="全屏"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+              </div>
+            </div>
+          </div>
+
+          <div id="dm-panel" class="dm-panel" hidden>
+            <label class="dm-row"><input id="dm-on" type="checkbox" checked> 弹幕</label>
+            <label class="dm-row">透明度 <input id="dm-opacity" type="range" min="20" max="100" step="5" value="90"></label>
+            <label class="dm-row">字号 <input id="dm-size" type="range" min="12" max="30" step="1" value="18"></label>
+            <label class="dm-row">速度 <input id="dm-speed" type="range" min="50" max="200" step="10" value="100"></label>
+            <label class="dm-row">区域
+              <select id="dm-area">
+                <option value="full">全屏</option>
+                <option value="top">上半屏</option>
+                <option value="bottom">下半屏</option>
+              </select>
+            </label>
+            <div class="dm-tip">弹幕来自红果 App 接口</div>
+          </div>
+
+          <div id="ep-panel" class="ep-panel" hidden>
+            <div class="ep-head">
+              <div class="ep-tabs" id="ep-tabs">
+                <button type="button" class="ep-tab active" data-etab="ep">选集</button>
+                <button type="button" class="ep-tab" data-etab="series" hidden>系列剧</button>
+              </div>
+              <span class="ep-count" id="ep-count"></span>
+              <button id="ep-close" class="icon-btn" aria-label="关闭">×</button>
+            </div>
+            <div class="ep-ranges" id="ep-ranges"></div>
+            <div class="ep-grid" id="p-chapters"></div>
+            <div class="ep-grid ep-series" id="ep-series" hidden></div>
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <div id="view-search" class="view" hidden>
+        <div class="filters">
+          <div class="filter-bar">
+            <span id="filter-sum" class="filter-sum">筛选：全部</span>
+            <button id="filter-expand" class="filter-expand" type="button">展开筛选 ▾</button>
+          </div>
+          <div id="filter-body" class="filter-body" hidden>
+            <nav id="chips" class="chips" aria-label="体裁"></nav>
+            <div id="filter-rows" class="filter-rows"></div>
+          </div>
+        </div>
+        <div id="grid" class="grid"></div>
+        <div class="more-wrap">
+          <button id="more" class="more" hidden>加载更多</button>
+          <button id="reset-search" class="more ghost" hidden>清空筛选</button>
+        </div>
+        <div id="empty" class="empty" hidden>没有找到内容</div>
+      </div>
+
+      <div id="view-rank" class="view" hidden>
+        <div class="rank-layout">
+          <div class="boards" id="boards"></div>
+          <div class="rank-main">
+            <div class="rank-tabs" id="rank-tabs">
+              <button class="rank-tab active" data-board="hongguo-hot">全部</button>
+              <button class="rank-tab" data-board="hongguo-real">真人剧</button>
+              <button class="rank-tab" data-board="hongguo-comic">漫剧</button>
+              <button class="rank-tab" data-board="hongguo-ai">AI剧</button>
+            </div>
+            <div id="rank-list" class="rank-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="view-new" class="view" hidden>
+        <div class="new-tabs" id="new-tabs">
+          <button class="new-tab active" data-newtab="rec">新剧推荐</button>
+          <button class="new-tab" data-newtab="cal">上新日历</button>
+        </div>
+        <div class="chips" id="new-filters">
+          <button class="chip active" data-gender="">全部</button>
+          <button class="chip" data-gender="male">男频</button>
+          <button class="chip" data-gender="female">女频</button>
+        </div>
+        <div id="new-dates" class="date-strip" hidden></div>
+        <div id="new-grid" class="grid"></div>
+        <div id="new-more" class="more-wrap" hidden><button id="new-more-btn" class="more" type="button">加载更多</button></div>
+        <div id="new-empty" class="empty" hidden>暂无内容</div>
+      </div>
+
+      <div id="view-list" class="view" hidden>
+        <h2 class="view-title" id="list-title">历史</h2>
+        <div id="list-body" class="list-body"></div>
+      </div>
+
+      <div id="view-follow" class="view" hidden>
+        <div class="follow-tabs" id="follow-tabs">
+          <button class="ftab active" data-ftab="follow">追更</button>
+          <button class="ftab" data-ftab="reserve">预约</button>
+        </div>
+        <div class="chips" id="follow-filters"></div>
+        <div id="follow-grid" class="grid"></div>
+        <div id="follow-empty" class="empty" hidden>暂无内容</div>
+      </div>
+      <div id="view-detail" class="view detail-view" hidden>
+        <button id="dv-back" class="dv-back" type="button">← 返回</button>
+        <div class="dv-hero">
+          <img id="d-cover" class="dv-cover" alt="">
+          <div class="dv-info">
+            <h1 id="d-title"></h1>
+            <div id="dv-meta" class="dv-meta"></div>
+            <div id="dv-tags" class="dv-tags"></div>
+            <p id="d-desc" class="dv-desc"></p>
+            <div class="dv-actions">
+              <button id="dv-play" class="primary" type="button">▶ 播放第1集</button>
+              <button id="dv-fav" class="btn-ghost" type="button">☆ 收藏</button>
+              <button id="dv-like" class="btn-ghost" type="button">♡ 点赞</button>
+              <button id="dv-follow" class="btn-ghost" type="button">＋ 追更</button>
+              <button id="dv-download" class="btn-ghost" type="button">↓ 下载</button>
+            </div>
+          </div>
+        </div>
+        <div id="dv-creators" class="dv-creators"></div>
+        <div id="dv-record" class="dv-record"></div>
+        <div class="dv-tabs" id="dv-tabs">
+          <button class="dv-tab active" data-dvtab="eps" type="button">选集 <em id="dv-eps-n"></em></button>
+          <button class="dv-tab" data-dvtab="reviews" type="button">剧评</button>
+          <button class="dv-tab" data-dvtab="related" type="button">相关推荐 <em id="dv-related-n"></em></button>
+        </div>
+        <div id="dv-eps" class="dv-pane"><div id="d-chapters" class="ep-grid"></div></div>
+        <div id="dv-reviews" class="dv-pane" hidden><div class="list-empty">暂无剧评</div></div>
+        <div id="dv-related" class="dv-pane grid" hidden></div>
+      </div>
+      <div id="view-creator" class="view creator-view" hidden>
+        <button id="cv-back" class="dv-back" type="button">← 返回</button>
+        <div class="cv-head">
+          <img id="cv-avatar" class="cv-avatar" alt="">
+          <div class="cv-info">
+            <h1 id="cv-name"></h1>
+            <div id="cv-badges" class="cv-badges"><span id="cv-verified" class="cv-verified" hidden>已入驻</span><span id="cv-role" class="cv-role"></span></div>
+            <div id="cv-stats" class="cv-stats"></div>
+            <div id="cv-id" class="cv-id"></div>
+            <p id="cv-bio" class="cv-bio"></p>
+            <button id="cv-follow" class="primary" type="button">＋ 关注</button>
+          </div>
+        </div>
+        <div class="dv-tabs"><button class="dv-tab active" id="cv-tab" type="button">作品</button></div>
+        <div id="cv-works" class="grid"></div>
+        <div id="cv-more-wrap" class="more-wrap" hidden><button id="cv-more" class="more" type="button">加载更多</button></div>
+        <div id="cv-empty" class="list-empty" hidden>作品信息暂不可用</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="login-modal" class="sheet" hidden>
+  <div class="sheet-panel login-panel">
+    <button class="close" data-close="login" aria-label="关闭">×</button>
+    <h2 class="login-title" id="login-title">登录红果</h2>
+    <div class="login-tabs">
+      <button class="login-tab active" data-login-tab="qr">扫码登录</button>
+      <button class="login-tab" data-login-tab="sms">短信登录</button>
+    </div>
+    <div class="login-pane" id="pane-qr">
+      <p class="login-tip" id="qr-tip">用「红果短剧」App 的扫一扫扫描二维码，在手机上确认后即可登录</p>
+      <div class="qr-box" id="qr-box"><span class="qr-loading">二维码加载中…</span><i class="qr-logo"><img src="/assets/logo.png" alt=""></i></div>
+      <p class="login-note" id="qr-hint">打开红果短剧 App → 我的 → 右上角扫一扫</p>
+      <button class="link-btn" id="qr-refresh">刷新二维码</button>
+      <p class="login-note login-save">登录状态由后端保存，下次启动自动恢复</p>
+    </div>
+    <div class="login-pane" id="pane-sms" hidden>
+      <input id="login-phone" inputmode="numeric" placeholder="手机号" autocomplete="tel">
+      <div class="sms-row">
+        <input id="login-code" inputmode="numeric" placeholder="验证码" autocomplete="one-time-code">
+        <button id="btn-send-code">发送验证码</button>
+      </div>
+      <div id="login-error" class="login-error" hidden></div>
+      <button class="primary" id="btn-sms-login">登录</button>
+      <p class="login-note">验证码由红果发送；首次登录可能要求上行短信验证。登录后可同步红果账号的收藏与历史。</p>
+    </div>
+    <p class="login-note local-note">不想用红果账号？<button class="link-btn" id="btn-local-toggle">使用本机账号</button></p>
+    <form id="login-form" autocomplete="off" hidden>
+      <div class="login-tabs">
+        <button type="button" class="login-tab active" id="tab-login">登录</button>
+        <button type="button" class="login-tab" id="tab-register">注册</button>
+      </div>
+      <input id="login-name" placeholder="用户名（2-20 个字符）" autocomplete="username">
+      <input id="login-pass" type="password" placeholder="密码（至少 4 位）" autocomplete="current-password">
+      <div id="login-local-error" class="login-error" hidden></div>
+      <button type="submit" class="primary login-submit" id="login-submit">登录</button>
+    </form>
+  </div>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="hg-sharpen" color-interpolation-filters="sRGB"><feConvolveMatrix order="3" kernelMatrix="0 -0.35 0 -0.35 2.4 -0.35 0 -0.35 0" preserveAlpha="true"/></filter></svg>
+<div id="settings-modal" class="modal" hidden>
+  <div class="sheet-panel settings-panel">
+    <div class="sheet-head"><b>设置</b><button class="sheet-close" id="st-close" type="button">✕</button></div>
+    <div class="st-group">
+      <div class="st-row"><div><b>默认清晰度</b><p>自动=最高档（1080P）</p></div><select id="st-quality"><option value="0">自动（最高）</option><option value="1080">1080P</option><option value="720">720P</option><option value="540">540P</option><option value="480">480P</option></select></div>
+      <div class="st-row"><div><b>超分辨率</b><p>低清画面锐化放大（实验性，占用少量 CPU）</p></div><label class="switch"><input type="checkbox" id="st-sr"><i></i></label></div>
+      <div class="st-row"><div><b>直连播放</b><p>客户端直接从红果 CDN 拉流，在浏览器本地解密播放（不经过宿主机；首次需下载约 32MB 解密模块）</p></div><label class="switch"><input type="checkbox" id="st-direct"><i></i></label></div>
+      <div class="st-row"><div><b>锐化强度</b><p>超分辨率开启后生效</p></div><select id="st-sharpen"><option value="light">轻度</option><option value="mid">中等</option><option value="strong">强</option></select></div>
+      <div class="st-row"><div><b>自动连播</b><p>一集播完自动下一集</p></div><label class="switch"><input type="checkbox" id="st-auto"><i></i></label></div>
+    </div>
+    <p class="st-tip">设置保存在本机浏览器</p>
+  </div>
+</div>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js?v=123"></script>
+</body>
+</html>

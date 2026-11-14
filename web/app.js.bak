@@ -1,0 +1,478 @@
+'use strict';
+
+const SOURCE = 'hongguo';
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  category: '',
+  query: '',
+  page: 1,
+  items: [],
+  hasMore: false,
+  loading: false,
+  categories: [],
+  drama: null,
+  chapters: [],
+  index: 0,
+  plan: null,
+  qualities: [],
+  quality: 0,
+  videoTime: 0,
+  watched: {},
+};
+
+/* ---------------- 基础工具 ---------------- */
+
+async function api(payload) {
+  const res = await fetch('/api', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error('服务返回异常');
+  }
+  if (!data.ok) throw new Error(data.error || '请求失败');
+  return data.data;
+}
+
+function proxyURL(url) {
+  const m = /^http:\/\/127\.0\.0\.1:(\d+)(\/.*)$/.exec(url || '');
+  return m ? `/rs/${m[1]}${m[2]}` : url;
+}
+
+function escapeHTML(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function coverURL(drama) {
+  const cover = (drama && drama.cover) || '';
+  const m = /\/novel-pic\/([0-9a-fA-F]+)~/.exec(cover);
+  if (m) return `https://p3-novel.byteimg.com/novel-pic/${m[1]}~tplv-shrink:640:0.image`;
+  return cover;
+}
+
+let toastTimer = 0;
+function toast(message, ms = 2600) {
+  const el = $('toast');
+  el.textContent = message;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+
+function progressKey(id) { return 'hg:progress:' + id; }
+function loadProgress(id) {
+  try { return JSON.parse(localStorage.getItem(progressKey(id)) || 'null'); } catch (e) { return null; }
+}
+function saveProgress(id, index, time) {
+  try {
+    localStorage.setItem(progressKey(id), JSON.stringify({ index, time, ts: Date.now() }));
+    state.watched[id] = index;
+  } catch (e) { /* ignore */ }
+}
+
+/* ---------------- 分类 ---------------- */
+
+async function loadCategories() {
+  try {
+    const data = await api({ action: 'categories', source: SOURCE });
+    state.categories = data.items || [];
+    renderChips();
+  } catch (e) {
+    /* 分类失败不影响浏览 */
+  }
+}
+
+function renderChips() {
+  $('chips').innerHTML = state.categories.map((item) => {
+    const active = !state.query && item.id === state.category ? ' active' : '';
+    return `<button class="chip${active}" data-cat="${escapeHTML(item.id)}">${escapeHTML(item.name)}</button>`;
+  }).join('');
+}
+
+/* ---------------- 列表 ---------------- */
+
+async function loadCatalog({ reset = false } = {}) {
+  if (state.loading) return;
+  state.loading = true;
+  if (reset) {
+    state.page = 1;
+    state.items = [];
+    $('grid').innerHTML = '';
+  }
+  $('more').disabled = true;
+  try {
+    const data = await api({
+      action: 'catalog',
+      source: SOURCE,
+      category: state.query ? '' : state.category,
+      page: state.page,
+      query: state.query,
+    });
+    const items = data.items || [];
+    state.items = reset ? items : state.items.concat(items);
+    state.hasMore = !!data.hasMore;
+    if (data.warning) toast(data.warning);
+    renderGrid();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    state.loading = false;
+    $('more').disabled = false;
+  }
+}
+
+function renderGrid() {
+  $('grid').innerHTML = state.items.map((drama) => {
+    const src = coverURL(drama);
+    const cover = src
+      ? `<img loading="lazy" src="${escapeHTML(src)}" alt="" onerror="this.remove()">`
+      : '';
+    const eps = drama.episodes ? `<span class="badge">${escapeHTML(drama.episodes)} 集</span>` : '';
+    const vip = drama.vip ? '<span class="badge vip">VIP</span>' : '';
+    const sub = [drama.category, drama.heat].filter(Boolean).map(escapeHTML).join(' · ');
+    return `<div class="card" data-id="${escapeHTML(drama.id)}">
+      <div class="cover-wrap">${cover}${eps}${vip}</div>
+      <h3>${escapeHTML(drama.title || '')}</h3>
+      <div class="sub">${sub}</div>
+    </div>`;
+  }).join('');
+  $('empty').hidden = state.items.length > 0;
+  $('more').hidden = !state.hasMore;
+  $('reset-search').hidden = !state.query;
+}
+
+function findDrama(id) {
+  return state.items.find((item) => item.id === id) || null;
+}
+
+/* ---------------- 详情 ---------------- */
+
+async function openDetail(drama) {
+  state.drama = drama;
+  state.chapters = [];
+  $('detail').hidden = false;
+  $('d-title').textContent = drama.title || '';
+  $('d-cover').src = coverURL(drama);
+  $('d-desc').textContent = drama.description || '';
+  $('d-meta').innerHTML = [
+    drama.category ? `<span class="tag">${escapeHTML(drama.category)}</span>` : '',
+    drama.episodes ? `<span class="tag">${escapeHTML(drama.episodes)} 集</span>` : '',
+    drama.heat ? `<span class="tag">${escapeHTML(drama.heat)}</span>` : '',
+    drama.vip ? '<span class="tag">VIP</span>' : '',
+  ].filter(Boolean).join('');
+  $('d-play').disabled = true;
+  $('d-play').textContent = '加载中…';
+  $('d-chapters').innerHTML = '';
+  try {
+    const data = await api({ action: 'detail', source: SOURCE, drama });
+    state.drama = Object.assign({}, drama, data.drama || {});
+    state.chapters = data.chapters || [];
+    if (data.warning) toast(data.warning);
+    renderDetail();
+  } catch (e) {
+    toast(e.message);
+    $('d-play').disabled = false;
+    $('d-play').textContent = '重试';
+  }
+}
+
+function renderDetail() {
+  const saved = loadProgress(state.drama.id);
+  const startIndex = saved && saved.index < state.chapters.length ? saved.index : 0;
+  $('d-play').disabled = state.chapters.length === 0;
+  $('d-play').textContent = saved ? `继续看第 ${startIndex + 1} 集` : '开始播放';
+  $('d-play').dataset.index = String(startIndex);
+  $('d-chapters').innerHTML = state.chapters.map((chapter, index) => {
+    const watched = saved && index < saved.index ? ' watched' : '';
+    return `<button class="chapter${watched}" data-index="${index}">${escapeHTML(chapter.title || '第' + (index + 1) + '集')}</button>`;
+  }).join('');
+}
+
+/* ---------------- 播放器 ---------------- */
+
+let playGeneration = 0;
+
+async function playEpisode(index, { quality = 0, keepTime = false, startTime = 0 } = {}) {
+  const chapter = state.chapters[index];
+  if (!chapter) return;
+  const generation = ++playGeneration;
+  const previousTime = startTime > 0 ? startTime : (keepTime ? state.videoTime : 0);
+  if (state.plan && state.plan.session) {
+    api({ action: 'release', session: state.plan.session }).catch(() => {});
+  }
+  state.plan = null;
+  state.index = index;
+  state.videoTime = 0;
+  $('detail').hidden = true;
+  $('player').hidden = false;
+  $('p-loading').hidden = false;
+  $('p-error').hidden = true;
+  $('p-title').textContent = state.drama.title || '';
+  $('p-sub').textContent = chapter.title || `第 ${index + 1} 集`;
+  renderPlayerChapters();
+  try {
+    const plan = await api({
+      action: 'resolve',
+      source: SOURCE,
+      drama: state.drama,
+      chapter,
+      index,
+      quality,
+    });
+    if (generation !== playGeneration) {
+      api({ action: 'release', session: plan.session }).catch(() => {});
+      return;
+    }
+    state.plan = plan;
+    state.qualities = plan.qualities || [];
+    state.quality = plan.quality || 0;
+    applyPlan(plan, previousTime);
+  } catch (e) {
+    if (generation !== playGeneration) return;
+    $('p-loading').hidden = true;
+    showPlayerError(e.message, false);
+  }
+}
+
+function applyPlan(plan, startTime) {
+  const video = $('video');
+  state.videoTime = startTime || 0;
+  video.src = proxyURL(plan.url);
+  renderQuality();
+  $('p-loading').hidden = true;
+  $('p-error').hidden = true;
+  video.onloadedmetadata = () => {
+    if (startTime > 0 && isFinite(video.duration)) {
+      video.currentTime = Math.min(startTime, Math.max(0, video.duration - 1));
+    }
+  };
+  video.play().catch(() => { /* 用户手势缺失时忽略 */ });
+}
+
+function renderQuality() {
+  const select = $('p-quality');
+  const current = state.quality || state.plan && state.plan.quality || 0;
+  const list = (state.qualities || []).slice().sort((a, b) => b - a);
+  if (!list.length) {
+    select.innerHTML = '<option>自动</option>';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = list.map((q) => {
+    const label = q >= 1080 ? '1080P' : q + 'P';
+    return `<option value="${q}"${q === current ? ' selected' : ''}>${label}</option>`;
+  }).join('');
+}
+
+function renderPlayerChapters() {
+  $('p-chapters').innerHTML = state.chapters.map((chapter, index) => {
+    const active = index === state.index ? ' active' : '';
+    return `<button class="chapter${active}" data-index="${index}">${escapeHTML(chapter.title || index + 1)}</button>`;
+  }).join('');
+  const active = $('p-chapters').querySelector('.chapter.active');
+  if (active) active.scrollIntoView({ block: 'nearest', inline: 'center' });
+}
+
+function showPlayerError(message, canFallback) {
+  $('p-error-text').textContent = message;
+  $('p-fallback').hidden = !canFallback;
+  $('p-error').hidden = false;
+}
+
+async function fallback() {
+  if (!state.plan || !state.plan.session) return;
+  $('p-error').hidden = true;
+  $('p-loading').hidden = false;
+  const keep = state.videoTime;
+  try {
+    const plan = await api({ action: 'fallback', session: state.plan.session });
+    state.plan = plan;
+    state.qualities = plan.qualities || state.qualities;
+    state.quality = plan.quality || state.quality;
+    applyPlan(plan, keep);
+  } catch (e) {
+    $('p-loading').hidden = true;
+    showPlayerError(e.message, false);
+  }
+}
+
+function closePlayer() {
+  playGeneration += 1;
+  if (state.plan && state.plan.session) {
+    api({ action: 'release', session: state.plan.session }).catch(() => {});
+  }
+  state.plan = null;
+  const video = $('video');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  $('player').hidden = true;
+  $('p-error').hidden = true;
+  $('p-loading').hidden = true;
+}
+
+function nextEpisode() {
+  if (state.index + 1 < state.chapters.length) {
+    playEpisode(state.index + 1, { quality: state.quality });
+  } else {
+    toast('已经是最后一集了');
+  }
+}
+
+function prevEpisode() {
+  if (state.index > 0) {
+    playEpisode(state.index - 1, { quality: state.quality });
+  } else {
+    toast('已经是第一集了');
+  }
+}
+
+/* ---------------- 事件绑定 ---------------- */
+
+function bindEvents() {
+  $('search-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    state.query = $('search-input').value.trim();
+    loadCatalog({ reset: true });
+  });
+
+  $('reset-search').addEventListener('click', () => {
+    state.query = '';
+    $('search-input').value = '';
+    loadCatalog({ reset: true });
+    renderChips();
+  });
+
+  $('chips').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.query = '';
+    $('search-input').value = '';
+    state.category = chip.dataset.cat || '';
+    renderChips();
+    loadCatalog({ reset: true });
+  });
+
+  $('grid').addEventListener('click', (event) => {
+    const card = event.target.closest('.card');
+    if (!card) return;
+    const drama = findDrama(card.dataset.id);
+    if (drama) openDetail(drama);
+  });
+
+  $('more').addEventListener('click', () => {
+    state.page += 1;
+    loadCatalog();
+  });
+
+  $('detail').addEventListener('click', (event) => {
+    if (event.target === $('detail')) $('detail').hidden = true;
+    const closer = event.target.closest('[data-close="detail"]');
+    if (closer) $('detail').hidden = true;
+  });
+
+  $('d-chapters').addEventListener('click', (event) => {
+    const button = event.target.closest('.chapter');
+    if (!button) return;
+    playEpisode(Number(button.dataset.index));
+  });
+
+  $('d-play').addEventListener('click', (event) => {
+    const index = Number(event.currentTarget.dataset.index || 0);
+    const saved = state.drama ? loadProgress(state.drama.id) : null;
+    const startTime = saved && saved.index === index ? saved.time || 0 : 0;
+    playEpisode(index, { startTime });
+  });
+
+  $('p-back').addEventListener('click', () => {
+    closePlayer();
+    $('detail').hidden = false;
+  });
+  $('p-close').addEventListener('click', closePlayer);
+  $('p-prev').addEventListener('click', prevEpisode);
+  $('p-next').addEventListener('click', nextEpisode);
+  $('p-fallback').addEventListener('click', fallback);
+
+  $('p-quality').addEventListener('change', (event) => {
+    const quality = Number(event.target.value) || 0;
+    playEpisode(state.index, { quality, keepTime: true });
+  });
+
+  $('p-chapters').addEventListener('click', (event) => {
+    const button = event.target.closest('.chapter');
+    if (!button) return;
+    playEpisode(Number(button.dataset.index), { quality: state.quality });
+  });
+
+  const video = $('video');
+  let progressAt = 0;
+  video.addEventListener('timeupdate', () => {
+    state.videoTime = video.currentTime;
+    if (!state.drama) return;
+    const now = Date.now();
+    if (now - progressAt > 3000) {
+      progressAt = now;
+      saveProgress(state.drama.id, state.index, video.currentTime);
+    }
+  });
+  video.addEventListener('ended', () => {
+    if (!state.drama) return;
+    saveProgress(state.drama.id, state.index + 1, 0);
+    if ($('p-auto').checked) nextEpisode();
+  });
+  video.addEventListener('playing', () => {
+    $('p-loading').hidden = true;
+    $('p-error').hidden = true;
+  });
+  video.addEventListener('error', () => {
+    if (!video.getAttribute('src')) return;
+    $('p-loading').hidden = true;
+    showPlayerError('播放失败：可能是该清晰度线路异常，试试切换清晰度或换一条线路。', true);
+  });
+
+  let stallTimer = 0;
+  video.addEventListener('waiting', () => {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      if (video.readyState < 3 && !video.paused) {
+        showPlayerError('线路响应较慢，可以点“换一条线路”重试。', true);
+      }
+    }, 15000);
+  });
+  video.addEventListener('playing', () => clearTimeout(stallTimer));
+  video.addEventListener('timeupdate', () => clearTimeout(stallTimer));
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      if (!$('player').hidden) closePlayer();
+      else if (!$('detail').hidden) $('detail').hidden = true;
+    }
+    if (!$('player').hidden) {
+      if (event.key === 'ArrowRight') nextEpisode();
+      if (event.key === 'ArrowLeft') prevEpisode();
+    }
+  });
+
+  let scrollLock = false;
+  window.addEventListener('scroll', () => {
+    if (scrollLock || !state.hasMore || state.loading) return;
+    if (window.innerHeight + window.scrollY < document.body.offsetHeight - 600) return;
+    scrollLock = true;
+    state.page += 1;
+    loadCatalog().finally(() => setTimeout(() => { scrollLock = false; }, 400));
+  });
+}
+
+/* ---------------- 启动 ---------------- */
+
+bindEvents();
+loadCategories();
+loadCatalog({ reset: true });
