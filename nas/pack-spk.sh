@@ -118,6 +118,14 @@ cat > "$ASSEMBLE/ui/config" <<EOF
 }
 EOF
 
+# ★ 关键：ui/ 必须同时放进 package.tgz（target/ui）—— DSM 的 webman 第三方链接
+#   指向 /var/packages/<pkg>/target/ui，只有这里存在才会生成「打开」按钮
+#  （SPK 根目录的 ui/ 保留给套件中心读取图标/配置）
+mkdir -p "$TARGET/ui/images"
+cp "$ASSEMBLE/ui/config" "$TARGET/ui/config"
+cp "$ASSEMBLE/ui/images/"*.png "$TARGET/ui/images/"
+chmod 644 "$TARGET/ui/config" "$TARGET/ui/images/"*.png 2>/dev/null || true
+
 # ── scripts/start-stop-status ────────────────────────────────────────────────
 cat > "$ASSEMBLE/scripts/start-stop-status" <<'SSS_EOF'
 #!/bin/sh

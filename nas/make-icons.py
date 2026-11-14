@@ -13,7 +13,9 @@ import os
 from PIL import Image, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "..", "web", "assets", "logo.png")
+# 优先用 1024x1024 的官方图标（nas/assets/source/），没有再退回项目自带 40x40 logo
+SRC_HQ = os.path.join(HERE, "assets", "source", "hongguo-short-drama-1024.png")
+SRC = SRC_HQ if os.path.exists(SRC_HQ) else os.path.join(HERE, "..", "web", "assets", "logo.png")
 ASSETS = os.path.join(HERE, "assets")
 UI_IMG = os.path.join(ASSETS, "ui", "images")
 SIZES = [16, 24, 32, 48, 64, 72, 128, 256]
@@ -21,15 +23,18 @@ MASTER = 1024
 
 
 def load_master() -> Image.Image:
-    """读项目 logo → 居中补成正方形 → 放大到 1024 → 轻锐化补偿放大模糊。"""
+    """读图标源 → 居中补正方形 → 必要时放大到 1024；小图放大的做轻度锐化。"""
     src = Image.open(SRC).convert("RGBA")
     w, h = src.size
     s = max(w, h)
     square = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     square.paste(src, ((s - w) // 2, (s - h) // 2))
-    master = square.resize((MASTER, MASTER), Image.LANCZOS)
-    # 40px → 1024px 放大必然变软，轻度 USM 让边缘/三角更实
-    master = master.filter(ImageFilter.UnsharpMask(radius=2.5, percent=90, threshold=2))
+    if s >= MASTER:
+        master = square.resize((MASTER, MASTER), Image.LANCZOS)
+    else:
+        master = square.resize((MASTER, MASTER), Image.LANCZOS)
+        # 小图放大必然变软，轻度 USM 让边缘/三角更实
+        master = master.filter(ImageFilter.UnsharpMask(radius=2.5, percent=90, threshold=2))
     return master
 
 
