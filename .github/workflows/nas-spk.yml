@@ -1,0 +1,116 @@
+name: build-nas-spk
+
+# 红果短剧 → 群晖 DSM 7 套件（SPK）
+#   workflow_dispatch：手动出包（版本 1.0.0-<run_number>，可用于日常验证）
+#   push tag nas-v*：出包并发布 GitHub Release（版本取 tag 去掉 nas-v 前缀）
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'nas-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            goarch: amd64
+            ffmpeg_asset: amd64
+          - arch: armv8
+            goarch: arm64
+            ffmpeg_asset: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/nas-v* ]]; then
+            v="${GITHUB_REF#refs/tags/nas-v}"
+          else
+            v="1.0.0-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+          echo "version = ${v}"
+
+      - name: Build server (linux/${{ matrix.goarch }})
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p .nas-build/bin .nas-build/web
+          cd server
+          go build -trimpath -buildvcs=false -ldflags '-s -w' -o ../.nas-build/bin/hongguoweb .
+
+      - name: Download ffmpeg.wasm
+        run: |
+          curl -fsSL -o .nas-build/web/ffmpeg-core.wasm \
+            https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm
+          ls -lh .nas-build/web/ffmpeg-core.wasm
+
+      - name: Download static ffmpeg (${{ matrix.ffmpeg_asset }})
+        run: |
+          mkdir -p .nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}
+          curl -fsSL -o /tmp/ffmpeg.tar.xz \
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${{ matrix.ffmpeg_asset }}-static.tar.xz"
+          tar -xJf /tmp/ffmpeg.tar.xz -C ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" --strip-components=1
+          ls -lh ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffmpeg" \
+                 ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffprobe"
+
+      - name: Pack SPK
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ARCH="${{ matrix.arch }}" \
+          VERSION="${VERSION}" \
+          BIN=".nas-build/bin/hongguoweb" \
+          FFMPEG_DIR=".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" \
+          WASM=".nas-build/web/ffmpeg-core.wasm" \
+          bash nas/pack-spk.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: spk-${{ matrix.arch }}
+          path: dist/*.spk
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/nas-v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.spk
+          generate_release_notes: true
+          append_body: true
+          body: |
+            红果短剧 Web 客户端 · 群晖 DSM 7 套件
+            - x86_64：DS923+ 等 Intel/AMD 机型
+            - armv8：ARM64 机型
+            安装：套件中心 → 手动安装 → 选 `.spk`（端口默认 8788，安装向导可改）
