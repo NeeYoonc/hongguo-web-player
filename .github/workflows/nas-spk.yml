@@ -77,9 +77,15 @@ jobs:
           fi
           ls -lh .nas-build/web/ffmpeg-core.wasm || true
 
+      - name: Setup Node (npm，用于安装弹幕组件依赖)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Pack SPK
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          NPM_REGISTRY: https://registry.npmjs.org
         run: |
           ARCH="${{ matrix.arch }}" \
           VERSION="${VERSION}" \

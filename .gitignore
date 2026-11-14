@@ -9,3 +9,4 @@ server/hongguoweb
 web/assets/ffmpeg/*.wasm
 .nas-build/
 dist/
+nas/assets/danmu/node_modules/

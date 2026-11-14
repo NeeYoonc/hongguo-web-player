@@ -36,6 +36,7 @@ esac
 
 VERSION="${VERSION:-1.0.0-3}"
 DEP_PKG="${DEP_PKG:-ffmpeg7}"
+DEP_NODE="${DEP_NODE:-Node.js_v22}"   # Node.js 官方套件（弹幕签名脚本需要 node）
 DEFAULT_PORT=8788
 BUILD_ROOT="${BUILD_ROOT:-$PROJECT_DIR/.nas-build}"
 OUT_DIR="${OUT_DIR:-$PROJECT_DIR/dist}"
@@ -68,14 +69,31 @@ if [ -f "$WASM" ]; then
 else
   echo "  ! 未内置 ffmpeg-core.wasm（$WASM 缺失）：浏览器直连播放不可用"
 fi
+# 弹幕签名组件（服务端 webDir/../signer/fetch_danmaku.mjs，需 node 执行）
+#   仓库只存 signer 源码；node_modules 构建期用 npm 装（不入库）
+DANMU_SRC="$ASSETS/danmu"
+if [ -d "$DANMU_SRC" ]; then
+  if [ ! -d "$DANMU_SRC/node_modules" ]; then
+    if command -v npm >/dev/null 2>&1; then
+      echo "  安装弹幕组件依赖（npm install --omit=dev）..."
+      ( cd "$DANMU_SRC" && npm install --omit=dev --no-audit --no-fund           --registry="${NPM_REGISTRY:-https://registry.npmmirror.com}" >/dev/null 2>&1 )         || echo "  ! npm install 失败：弹幕功能可能不可用"
+    else
+      echo "  ! 未找到 npm：弹幕功能不可用（请装 Node.js 后重试）"
+    fi
+  fi
+  cp -a "$DANMU_SRC" "$TARGET/signer"
+  echo "  ✓ 内置弹幕组件 signer/ ($(du -sh "$TARGET/signer" | cut -f1))"
+else
+  echo "  ! 未找到 $DANMU_SRC：弹幕功能不可用"
+fi
 echo "  ✓ 不内置 ffmpeg/ffprobe —— 依赖套件: ${DEP_PKG}"
 
 # ── INFO ──────────────────────────────────────────────────────────────────────
 cat > "$ASSEMBLE/INFO" <<EOF
 package="${APP_NAME}"
 version="${VERSION}"
-description="红果短剧 Web 客户端：推荐流 / 找剧 / 详情 / 弹幕 / 评论 / 直连播放的自托管播放器（需先安装 ${DEP_PKG}）。仅供个人学习研究。"
-install_dep_packages="${DEP_PKG}"
+description="红果短剧 Web 客户端：推荐流 / 找剧 / 详情 / 弹幕 / 评论 / 直连播放的自托管播放器（需先安装 ${DEP_PKG} 与 ${DEP_NODE}）。仅供个人学习研究。"
+install_dep_packages="${DEP_PKG}:${DEP_NODE}"
 arch="${ARCH}"
 maintainer="NeeYoonc"
 maintainer_url="https://github.com/NeeYoonc/hongguo-web-player"
@@ -88,7 +106,7 @@ dsmuidir="ui"
 dsmappname="SYNO.SDS.Hongguoweb.Application"
 helpurl="https://github.com/NeeYoonc/hongguo-web-player"
 support_url="https://github.com/NeeYoonc/hongguo-web-player"
-changelog="[${VERSION}] 不内置 ffmpeg：依赖套件源里的 ${DEP_PKG}（未安装时拒绝安装）；内置 ffmpeg.wasm 浏览器直连解密"
+changelog="[${VERSION}] 依赖 ${DEP_PKG}（ffmpeg）+ ${DEP_NODE}（node，弹幕用）；内置 signer 弹幕组件与 ffmpeg.wasm"
 checksum=""
 EOF
 
@@ -184,6 +202,19 @@ setup_ffmpeg_shim() {
   return 1
 }
 
+# node：弹幕签名脚本（signer/fetch_danmaku.mjs）由 node 执行 → 建 node shim
+setup_node() {
+  for _cand in     /var/packages/Node.js_v22/target/usr/local/bin     /var/packages/Node.js_v20/target/usr/local/bin     /var/packages/Node.js_v18/target/usr/local/bin     /usr/local/bin /usr/bin; do
+    if [ -x "$_cand/node" ]; then
+      ln -sf "$_cand/node" "$VAR/bin/node" 2>/dev/null || true
+      echo "  node: $_cand/node"
+      return 0
+    fi
+  done
+  echo "[!] 未找到 node（Node.js 套件未安装？）：弹幕功能不可用，其他功能不受影响" >&2
+  return 1
+}
+
 do_start() {
   if is_running; then
     echo "已在运行 (pid $(cat "$PID"))"
@@ -191,6 +222,8 @@ do_start() {
   fi
   mkdir -p "$VAR/data" "$VAR/cache" "$VAR/tmp" || return 1
   setup_ffmpeg_shim >&2 || true
+  setup_node >&2 || true
+  # $VAR/bin 里是 ffmpeg/ffprobe/node 的 shim → 必须排在 PATH 最前
   export PATH="$VAR/bin:$BASE/bin:$PATH"
   PORT=$(resolve_port)
   export TMPDIR="$VAR/tmp"
@@ -392,4 +425,4 @@ rm -f "$OUT_SPK"
 
 echo
 echo "✓ 打包完成: $OUT_SPK"
-echo "  架构: $ARCH  版本: $VERSION  依赖: ${DEP_PKG}  大小: $(du -h "$OUT_SPK" | cut -f1)"
+echo "  架构: $ARCH  版本: $VERSION  依赖: ${DEP_PKG} + ${DEP_NODE}  大小: $(du -h "$OUT_SPK" | cut -f1)"

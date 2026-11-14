@@ -1,73 +1,97 @@
-# 红果短剧 Web 客户端
+# 红果短剧 Web 客户端（群晖 NAS 套件）
 
-一个跑在群晖 NAS 上的红果短剧网页版：搜索、分类、详情、选集、清晰度切换、上下集、自动连播、进度记忆。
-取流复用「红果鉴」(guoapp) 的 Go 核心（设备注册 / 签名 / 播放地址 / CENC 解密），不需要手机 App。
+把红果短剧搬到浏览器里的自托管播放器：推荐流、找剧、排行榜、新剧/上新日历、历史、收藏、点赞、追更/预约、搜索、详情页、演员主页、**弹幕**、评论抽屉、清晰度切换、浏览器本地解密直连播放。
 
-## 访问地址
+以 **群晖 DSM 7 套件（SPK）** 形式发布：套件中心一键安装 / 升级 / 卸载，套件图标直达网页。
 
-- 局域网：**http://192.168.2.22:8788**
-- 建议用桌面 Chrome / Edge / Safari 打开；手机浏览器同样可用（竖屏体验一般）。
+> 仅供个人学习研究，内容版权归红果短剧及其权利人所有。请使用你自己的账号登录。
 
-## 启动 / 停止
+## 安装（群晖 DSM 7）
 
-```sh
-/volume1/AI/红果/client/start.sh   # 启动（已在运行会直接提示）
-/volume1/AI/红果/client/stop.sh    # 停止
-tail -f /volume1/AI/红果/client/server.log   # 看日志
-```
+**前置依赖**（套件中心里装好，缺任一个都会拒绝安装）：
 
-开机自启：群晖「控制面板 → 任务计划 → 新增 → 触发的任务 → 开机」，用户选 root，
-命令填 `/volume1/AI/红果/client/start.sh`。
+| 依赖 | 包名 | 来源 |
+|---|---|---|
+| FFmpeg 7 | `ffmpeg7` | 套件中心 → 社群（SynoCommunity） |
+| Node.js v22 | `Node.js_v22` | 套件中心 → 官方套件（开发工具） |
 
-## 播放原理（为什么需要本机 ffmpeg）
+**安装套件**：套件中心 → 手动安装 → 选 `hongguoweb_<arch>.spk`
+（`x86_64` = DS923+/Intel/AMD；`armv8` = ARM64 机型）。
 
-红果 App 的播放地址是 **HEVC 编码 + CENC 加密** 的 MP4，浏览器不能直接播放，所以服务端做了一层适配：
+- 安装向导可填 **Web 端口**（默认 8788，留空即可）
+- 安装完成后套件中心出现「打开」按钮，点开即用
+- 下载地址：<https://github.com/NeeYoonc/hongguo-web-player/releases>（`nas-v*` 标签）
+
+依赖写在 `INFO` 的 `install_dep_packages="ffmpeg7:Node.js_v22"` 里，**没有依赖装不上**。
+
+## 功能
+
+- **推荐流**：关注 / 漫剧 / 真人剧 / 推荐四个 tab，滚轮或 ↑↓ 切换；播放超过 1 集后滚轮切集，返回推荐页后滚轮切剧。
+- **找剧**：体裁 + 热门/情节/主题/背景/角色/推荐/状态多行筛选，卡片带热度、集数、评分，点击直接播放。
+- **详情页**：主创/演员、备案号、标签、选集（序号+时长）、相关推荐；点演员进创作者主页。
+- **新剧**：新剧推荐（按上线时间、男频/女频）+ 上新日历（15 天日期条、预约数）。
+- **播放器**：自绘控制条、选集区间、倍速、清晰度、**弹幕（含 53 个表情）**、评论抽屉、右侧点赞/评论/收藏；PC 与手机自适应。
+- **直连播放**：浏览器 fetch 红果 CDN + 套件内置的 ffmpeg.wasm 本地解密（HEVC/AAC → fMP4），不经过服务器中转；也可切回服务器中转（用依赖套件的 ffmpeg）。
+- **本机账号**：侧栏底部可注册/登录本站账号（收藏、点赞、历史按账号隔离）。
+
+## 播放原理（为什么要 ffmpeg）
+
+红果播放地址是 **HEVC + CENC 加密**的 MP4，浏览器不能直接播，套件提供两条路径：
 
 | 浏览器 | 路径 | 说明 |
-| --- | --- | --- |
-| Safari / iOS / 支持 HEVC 的 Edge/Chrome | `/dec` | ffmpeg 用解密密钥把流 remux 成普通 HEVC MP4 并缓存，原生播放、拖动秒响应、保留全部清晰度（最高 1080P） |
-| Chrome / Firefox 等不支持 HEVC | `/tc` | ffmpeg 实时转码成 H.264 fMP4，前端用 MSE 播放，支持拖动（拖到未转码区域会重新起转，约 1~2 秒） |
+|---|---|---|
+| Safari / iOS / 支持 HEVC 的 Chrome/Edge | `/dec` | 依赖套件的 ffmpeg 用解密密钥 remux 成普通 HEVC MP4 并缓存，原生播放、拖动秒响应、最高 1080P |
+| Chrome / Firefox 等不支持 HEVC | `/tc` | ffmpeg 实时转码 H.264 fMP4，前端 MSE 播放（拖到未转码区域会重新起转，约 1~2 秒） |
+| 直连模式 | 浏览器端 | 套件内置 `ffmpeg-core.wasm` 在浏览器本地解密，不占服务器 CPU |
 
-- 首次播放有 1~3 秒「正在取流」准备时间（要等 ffmpeg 起转/解密缓存）。
-- 转码路径输出 720P（NAS 的 CPU 软解 1080P HEVC 约 2.3 倍速，够实时播放）。
-- 解密后的视频缓存在 `cache/dec/`，上限 4GB，超出自动删最旧的；重看同一集秒开。
+解密缓存位于套件数据目录，上限 4GB，超出自动淘汰最旧的。
 
-## 目录
+## 套件目录与数据
 
 ```
-client/
-├── server/           Go 服务（main.go + player.go），二进制 hongguoweb
-├── web/              前端（index.html / app.js / style.css）
-├── data/             红果鉴核心的数据目录（设备信息、目录缓存）
-├── cache/            /dec 解密缓存
-├── start.sh / stop.sh
-└── server.log
+/var/packages/hongguoweb/target/     程序（升级时整体替换）
+  bin/hongguoweb                       Go 服务端
+  web/                                 前端（含 assets/ffmpeg/ffmpeg-core.wasm）
+  signer/                              弹幕签名组件（fetch_danmaku.mjs + danmu_api + node_modules）
+/var/packages/hongguoweb/var/        数据（升级保留）
+  ports                                端口
+  data/                                设备信息、目录缓存、本机账号（users.json）
+  cache/                               解密/转码缓存
+  bin/                                 ffmpeg / ffprobe / node 的 shim 软链（每次启动重建）
+  hongguoweb.log / hongguoweb.pid
 ```
+
+- **升级**：套件中心直接装新版本，数据保留
+- **卸载**：卸载向导默认「保留数据」，选「彻底删除」才清空
+- **回退**：卸载（保留数据）→ 装回旧版本
 
 ## 注意
 
-- 服务监听 `0.0.0.0:8788`，**没有登录鉴权**，只适合局域网使用，不要做端口映射暴露到公网。
-- 同时观看多路时每路转码会占 1~2 个 CPU 核；NAS 是 2 核 4 线程，建议同时不超过 2 路。
-- 依赖 NAS 自带的 ffmpeg（7.0.2，含 libx264 / HEVC 解码器）。若系统里没有，`-ffmpeg` 参数可指定路径。
-- 上游接口/签名由 guoapp 核心维护；红果改版后需要同步更新 `/volume1/AI/guoapp/native/core` 并重新编译。
+- 服务监听 `0.0.0.0:<端口>`，**没有鉴权**，只适合局域网使用，不要做端口映射暴露公网。
+- 多路同时观看时每路转码占 1~2 个 CPU 核，建议同时不超过 2 路。
+- 弹幕需要**红果账号登录态**（浏览器 localStorage 里的 cookies，按请求发给服务端）；未登录时弹幕为空、评论不可用，不影响播放。
+- 红果改版后签名/接口可能失效，需要同步上游 `native/core` 重新编译。
 
-## 本机账号（收藏 / 点赞 / 历史）
+## 开发 / 非群晖部署
 
-- 侧栏底部「登录」可注册/登录**本机账号**（用户名 2-20 字符、密码至少 4 位），数据保存在 `data/users.json`，按账号隔离收藏、点赞与观看历史。
-- 登录后：播放页右侧 ☆ 收藏、♡ 点赞；侧栏「收藏·点赞」「历史」查看对应列表；退出登录后回到游客态（游客的收藏/点赞暂存在浏览器本地）。
-- 说明：这是**本机账号**，不是红果官方账号。红果官方登录需要手机号短信验证并走官方 passport 接口，当前核心未接入；本机账号仅用于本站内的数据归属，不涉及红果账号权益。
+本仓库同时保留手动运行方式（适合调试）：
 
-## 群晖 DSM 7 套件（SPK）
+```sh
+# 依赖：Go 1.24+、ffmpeg、Node 18+（弹幕用）
+cd server && go build -o hongguoweb .        # 交叉编译加 GOOS=linux
+./hongguoweb -addr 0.0.0.0:8788 -data ./data -web ./web -cache ./cache
+```
 
-已提供套件打包（见 `nas/`）：**不内置 ffmpeg**，直接依赖套件中心「社群」里现成的 SynoCommunity FFmpeg。
+弹幕组件在 `nas/assets/danmu/`（源码入库，`node_modules` 构建期 `npm install --omit=dev` 生成）：
 
-- 依赖：**FFmpeg 7**（包名 `ffmpeg7`）。`INFO` 里有 `install_dep_packages="ffmpeg7"`，**未装依赖时套件中心拒绝安装**
-- 安装顺序：套件中心 → 社群 → 装 FFmpeg 7 → 手动安装 `hongguoweb_<arch>-*.spk`（端口默认 8788）
-- 下载：<https://github.com/NeeYoonc/hongguo-web-player/releases>（`nas-v*` 标签，x86_64 / armv8）
-- 社区包二进制带版本后缀（`ffmpeg7`/`ffprobe7`），套件启动时会建 shim 软链给服务端用；细节见 [`nas/README.md`](nas/README.md)
+```sh
+cd nas/assets/danmu && npm install --omit=dev --no-audit --no-fund
+```
+
+打群晖套件见 [`nas/README.md`](nas/README.md)。
 
 ## 更新记录
 
-- v126：观看进度写回红果账号（`/reading/bookapi/read_history/update/v` + `/reading/bookapi/read_progress/upload/v`，注意 update 用数字 id、upload 用字符串 id）；历史页本地进度与账号进度按时间合并。
+- v126：观看进度写回红果账号（`/reading/bookapi/read_history/update/v` + `/reading/bookapi/read_progress/upload/v`）；历史页本地进度与账号进度按时间合并。
 - v119–v122：浏览器端 ffmpeg.wasm 本地解密直连播放（CENC/H.265），解密缓存与下一集预解密。
 - v112：登录会话改存浏览器 localStorage（`hg:cookies`），服务端不再落盘。
