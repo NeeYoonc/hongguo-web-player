@@ -194,3 +194,60 @@ func (engine *nativeEngine) hgSetFavorite(ctx context.Context, seriesID string, 
 	}
 	return map[string]any{"ok": true, "fav": add, "raw": res}, nil
 }
+
+// hgReportProgress 上报观看进度到红果账号（竞品同款：read_history/update + read_progress/upload）。
+// seriesID 为剧 id，vid 为单集视频 id，episode 为 1 基集号。
+func (engine *nativeEngine) hgReportProgress(ctx context.Context, seriesID, vid string, episode, positionMS, cumulativeMS int64) (map[string]any, error) {
+	sid := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(seriesID), "hongguo:"))
+	v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(vid), "hongguo-cenc://"))
+	if sid == "" || v == "" {
+		return nil, errors.New("缺少剧/集 id")
+	}
+	if episode < 1 {
+		episode = 1
+	}
+	wireIndex := episode - 1
+	now := time.Now().UnixMilli()
+	bookVal := any(sid)
+	if n, perr := strconv.ParseUint(sid, 10, 64); perr == nil {
+		bookVal = n
+	}
+	vidVal := any(v)
+	if n, perr := strconv.ParseUint(v, 10, 64); perr == nil {
+		vidVal = n
+	}
+	updateItem := map[string]any{
+		"book_id": bookVal, "book_type": 2, "chapter_index": 0,
+		"current_play_position": positionMS, "digged_count": 0, "duration": 0, "episode_cnt": 0,
+		"is_delete": false, "is_interactive_game": false, "is_listen_mode": false,
+		"is_multi_season": 0, "meet_guide_comment_tag": false, "origin_novel_book_id": 0,
+		"player_accumulate_total_time": cumulativeMS, "read_timestamp_ms": now, "recent_reads": 0,
+		"retain_video_play_time": 0, "season_index": 0, "series_play_cnt": 0, "tone_id": 0,
+		"update_timestamp_ms": now, "use_soft_delete": false, "user_digg": false,
+		"user_playlet_comment_flag": false, "vid": vidVal, "vid_index": wireIndex,
+	}
+	update, err := engine.hongguoLoginRequest(ctx, "POST", "/reading/bookapi/read_history/update/v", nil, map[string]any{
+		"update_datas": []any{updateItem},
+	})
+	if err != nil {
+		return nil, err
+	}
+	uploadItem := map[string]any{
+		"book_id": sid, "book_type": 2, "channel_id": 0, "check_timestamp": false,
+		"cur_channel_id": 0, "current_play_time": positionMS, "is_listen_mode": false,
+		"is_local_book": false, "item_id": v, "listen_and_read": false, "page_index": 0,
+		"page_progress_rate": 0, "paragraph_offset": 0,
+		"player_cumulative_total_duration": cumulativeMS, "progress_type": 0,
+		"read_timestamp_ms": now, "tone_id": 0, "vid_index": 0,
+	}
+	upload, uerr := engine.hongguoLoginRequest(ctx, "POST", "/reading/bookapi/read_progress/upload/v", nil, map[string]any{
+		"books": []any{uploadItem},
+	})
+	out := map[string]any{"ok": uerr == nil, "episode": episode, "raw": update}
+	if uerr != nil {
+		out["uploadError"] = uerr.Error()
+	} else {
+		out["upload"] = upload
+	}
+	return out, nil
+}

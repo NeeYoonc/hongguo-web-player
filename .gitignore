@@ -1,9 +1,0 @@
-data/
-cache/
-tmp/
-tools/
-signer/
-*.log
-*.pid
-server/hongguoweb
-web/assets/ffmpeg/*.wasm

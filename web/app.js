@@ -499,11 +499,68 @@ function progressKey(id) { return 'hg:progress:' + id; }
 function loadProgress(id) {
   try { return JSON.parse(localStorage.getItem(progressKey(id)) || 'null'); } catch (e) { return null; }
 }
+// 云端观看进度上报（红果账号历史）：read_history/update + read_progress/upload
+const cloudProgress = { key: '', at: 0, pending: false };
+function reportCloudProgress(force) {
+  try {
+    if (!officialUser || !state.drama || !state.chapters || !state.chapters.length) return;
+    const ch = state.chapters[state.index];
+    if (!ch) return;
+    const vid = String(ch.videoUrl || '').replace('hongguo-cenc://', '');
+    const sid = String(state.drama.id || '').replace('hongguo:', '');
+    if (!/^\d{10,}$/.test(vid) || !/^\d{10,}$/.test(sid)) return;
+    const now = Date.now();
+    const key = state.drama.id + ':' + state.index;
+    if (!force) {
+      if (cloudProgress.pending) return;
+      if (key === cloudProgress.key && now - cloudProgress.at < 20000) return;
+    }
+    if (!force && now - cloudProgress.at < 8000) return;
+    const v = $('video');
+    const posMs = Math.max(0, Math.round((v && v.currentTime ? v.currentTime : 0) * 1000));
+    if (posMs < 1000) return;
+    cloudProgress.key = key; cloudProgress.at = now; cloudProgress.pending = true;
+    api({ action: 'hgReportProgress', query: sid, session: vid, index: state.index + 1,
+      positionMs: posMs, cumulativeMs: posMs }).catch(() => {}).finally(() => { cloudProgress.pending = false; });
+  } catch (e) { cloudProgress.pending = false; }
+}
+
 function saveProgress(id, index, time) {
   try {
-    localStorage.setItem(progressKey(id), JSON.stringify({ index, time, ts: Date.now() }));
+    const ch = (state.chapters || [])[index] || null;
+    const vid = ch ? String(ch.videoUrl || '').replace('hongguo-cenc://', '') : '';
+    const prev = loadProgress(id) || {};
+    const payload = { index, time, ts: Date.now() };
+    if (vid) payload.vid = vid;
+    if (ch && ch.title) payload.epTitle = ch.title;
+    if (prev.duration) payload.duration = prev.duration;
+    localStorage.setItem(progressKey(id), JSON.stringify(payload));
     state.watched[id] = index;
   } catch (e) { /* ignore */ }
+}
+
+// 本地观看进度（比红果接口更新时用于覆盖历史列表）
+function localHistoryEntries() {
+  const out = new Map();
+  historyIDs().forEach((id) => {
+    const p = loadProgress(id);
+    if (!p || typeof p.index !== 'number') return;
+    let drama = null;
+    try { drama = JSON.parse(localStorage.getItem('hg:drama:' + id) || 'null'); } catch (e) { drama = null; }
+    if (!drama || !drama.id) return;
+    out.set(id, {
+      id: drama.id,
+      title: drama.title || '',
+      cover: drama.cover || '',
+      episodes: drama.episodes || 0,
+      progressIndex: p.index,
+      updatedAt: p.ts || 0,
+      position: Math.round((Number(p.time) || 0) * 1000),
+      vid: p.vid || '',
+      local: true,
+    });
+  });
+  return out;
 }
 
 /* ---------------- 分类 ---------------- */
@@ -2446,8 +2503,24 @@ async function loadList(kind) {
       try {
         const resp = await api({ action: 'hgUserHistory', page: 1 });
         const items = ((resp && (resp.items ? resp : resp.data)) || {}).items || [];
+        const local = localHistoryEntries();
+        const merged = items.map((it) => {
+          const l = local.get(it.id);
+          if (l && (l.updatedAt || 0) > (it.updatedAt || 0)) {
+            it.progressIndex = l.progressIndex;
+            it.updatedAt = l.updatedAt;
+            it.position = l.position;
+            if (l.vid) it.vid = l.vid;
+            if (!it.title) it.title = l.title;
+            if (!it.cover) it.cover = l.cover;
+          }
+          local.delete(it.id);
+          return it;
+        });
+        local.forEach((l) => merged.push(l));
+        merged.sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
         officialHistoryList.length = 0;
-        items.forEach((it) => officialHistoryList.push(it));
+        merged.forEach((it) => officialHistoryList.push(it));
       } catch (e) { /* ignore */ }
     }
     officialHistoryList.forEach((it) => officialHistory.set(it.id, it));
@@ -3951,11 +4024,13 @@ dmApplyStyle();
     if (now - progressAt > 3000) {
       progressAt = now;
       saveProgress(state.drama.id, state.index, video.currentTime);
+      reportCloudProgress(false);
     }
   });
   video.addEventListener('ended', () => {
     if (!state.drama) return;
     saveProgress(state.drama.id, state.index + 1, 0);
+    reportCloudProgress(true);
     if ($('p-auto').checked) nextEpisode();
   });
   video.addEventListener('playing', () => {
@@ -3971,7 +4046,7 @@ dmApplyStyle();
     dmReset(video.currentTime * 1000);
   });
   video.addEventListener('durationchange', syncProgress);
-  video.addEventListener('pause', () => { showControls(true); syncProgress(); });
+  video.addEventListener('pause', () => { showControls(true); syncProgress(); reportCloudProgress(true); });
   video.addEventListener('play', () => { syncProgress(); });
   video.addEventListener('volumechange', syncProgress);
   video.addEventListener('click', togglePlay);
@@ -4231,4 +4306,4 @@ bindViewEvents();
 bindFollowEvents();
 bootstrapSession().finally(() => { initAuth(); });
 showView('recommend');
-window.__hg = { get state() { return state; }, get feed() { return feed; }, get rankState() { return rankState; }, get newState() { return newState; }, feedStep: feedStep, showView: showView, dmRichHTML: dmRichHTML, dmSpawn: dmSpawn, openDetail: openDetail, playEpisode: playEpisode, hideControls: hideControls, showControls: showControls, renderPlayerChapters: renderPlayerChapters, searchHistory: function () { return searchHistory.slice(); }, nextEpisode: nextEpisode, prevEpisode: prevEpisode, playHistoryItem: playHistoryItem, updateCommentCount: updateCommentCount, likeIndex: likeIndex, favIndex: favIndex, ensureLikeIndex: ensureLikeIndex, isLiked: isLiked };
+window.__hg = { get state() { return state; }, get feed() { return feed; }, get rankState() { return rankState; }, get newState() { return newState; }, feedStep: feedStep, showView: showView, dmRichHTML: dmRichHTML, dmSpawn: dmSpawn, openDetail: openDetail, playEpisode: playEpisode, hideControls: hideControls, showControls: showControls, renderPlayerChapters: renderPlayerChapters, searchHistory: function () { return searchHistory.slice(); }, nextEpisode: nextEpisode, prevEpisode: prevEpisode, playHistoryItem: playHistoryItem, updateCommentCount: updateCommentCount, reportCloudProgress: reportCloudProgress, setOfficialUser: function (v) { officialUser = v; }, likeIndex: likeIndex, favIndex: favIndex, ensureLikeIndex: ensureLikeIndex, isLiked: isLiked };

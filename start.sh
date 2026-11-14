@@ -1,7 +1,7 @@
 #!/bin/sh
 # 红果短剧 Web 客户端启动脚本（带守护，群晖 NAS 常驻）
 set -u
-DIR=$(cd "$(dirname "$0")" && pwd)
+DIR=/volume1/AI/红果/client
 LOG="$DIR/server.log"
 PID="$DIR/server.pid"
 SUP="$DIR/supervisor.pid"

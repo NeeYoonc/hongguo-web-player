@@ -1,7 +1,7 @@
 #!/bin/sh
 # 红果短剧 Web 客户端守护脚本：崩溃/被杀后自动拉起，记录退出码
 set -u
-DIR=$(cd "$(dirname "$0")" && pwd)
+DIR=/volume1/AI/红果/client
 BIN="$DIR/server/hongguoweb"
 LOG="$DIR/server.log"
 PID="$DIR/server.pid"

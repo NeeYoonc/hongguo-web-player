@@ -110,7 +110,7 @@ var (
 	webDir   string
 )
 
-func fetchDanmaku(vid, sid string, startMs, durMs int64) ([]map[string]any, int, error) {
+func fetchDanmaku(vid, sid string, startMs, durMs int64, cookies map[string]string) ([]map[string]any, int, error) {
 	if vid == "" || sid == "" {
 		return nil, 0, errors.New("缺少剧集参数")
 	}
@@ -118,6 +118,16 @@ func fetchDanmaku(vid, sid string, startMs, durMs int64) ([]map[string]any, int,
 	seen := map[string]bool{}
 	script := filepath.Join(webDir, "..", "signer", "fetch_danmaku.mjs")
 	login := filepath.Join(dataRoot, "hongguo-web-login.json")
+	if len(cookies) > 0 {
+		if tmp, terr := os.CreateTemp("", "hg-dm-*.json"); terr == nil {
+			payload := map[string]any{"cookies": cookies, "token": "", "device": map[string]any{}}
+			data, _ := json.Marshal(payload)
+			tmp.Write(data)
+			tmp.Close()
+			login = tmp.Name()
+			defer os.Remove(login)
+		}
+	}
 	if durMs <= 0 || durMs > 1200000 {
 		durMs = 300000
 	}
@@ -202,7 +212,15 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 		sid, _ := payload["query"].(string)
 		startMs, _ := payload["startMs"].(float64)
 		durMs, _ := payload["durationMs"].(float64)
-		items, total, derr := fetchDanmaku(vid, sid, int64(startMs), int64(durMs))
+		cookieMap := map[string]string{}
+		if cm, ok := payload["cookies"].(map[string]any); ok {
+			for k, v := range cm {
+				if sv, ok := v.(string); ok && sv != "" {
+					cookieMap[k] = sv
+				}
+			}
+		}
+		items, total, derr := fetchDanmaku(vid, sid, int64(startMs), int64(durMs), cookieMap)
 		log.Printf("danmaku sid=%s vid=%s items=%d total=%d err=%v", sid, vid, len(items), total, derr)
 		if derr != nil {
 			writeJSON(w, 200, map[string]any{"ok": false, "error": derr.Error()})

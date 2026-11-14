@@ -159,6 +159,8 @@ type nativeInput struct {
 	Body            string                  `json:"body"`
 	Headers         map[string]string       `json:"headers"`
 	Cookies         map[string]string       `json:"cookies"`
+	PositionMS      int64                   `json:"positionMs"`
+	CumulativeMS    int64                   `json:"cumulativeMs"`
 }
 
 type nativeCatalogResult struct {
@@ -545,6 +547,8 @@ func nativeDispatch(input nativeInput) (any, error) {
 		return engine.hgDigg(ctx, input.Session, input.Force)
 	case "hgSetFavorite":
 		return engine.hgSetFavorite(ctx, input.Session, input.Force)
+	case "hgReportProgress":
+		return engine.hgReportProgress(ctx, input.Query, input.Session, int64(input.Index), input.PositionMS, input.CumulativeMS)
 	case "hgLoginFanqieQRStart":
 		return engine.hongguoFanqieQRStart(ctx)
 	case "hgLoginFanqieQRPoll":
