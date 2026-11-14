@@ -58,18 +58,42 @@ jobs:
 
       - name: Download ffmpeg.wasm
         run: |
-          curl -fsSL -o .nas-build/web/ffmpeg-core.wasm \
-            https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm
-          ls -lh .nas-build/web/ffmpeg-core.wasm
+          ok=0
+          for i in 1 2 3 4 5; do
+            if curl -fsSL --connect-timeout 20 --max-time 300 --retry 2 --retry-all-errors --retry-delay 5 \
+                 -o .nas-build/web/ffmpeg-core.wasm \
+                 https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm; then
+              ok=1; break
+            fi
+            echo "ffmpeg-core.wasm 下载失败（第 $i 次），10s 后重试"; sleep 10
+          done
+          if [ "$ok" != "1" ]; then
+            rm -f .nas-build/web/ffmpeg-core.wasm
+            echo "::warning::ffmpeg-core.wasm 下载失败，本次不内置（浏览器直连播放不可用）"
+          fi
+          ls -lh .nas-build/web/ffmpeg-core.wasm || true
 
       - name: Download static ffmpeg (${{ matrix.ffmpeg_asset }})
         run: |
-          mkdir -p .nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}
-          curl -fsSL -o /tmp/ffmpeg.tar.xz \
-            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${{ matrix.ffmpeg_asset }}-static.tar.xz"
-          tar -xJf /tmp/ffmpeg.tar.xz -C ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" --strip-components=1
-          ls -lh ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffmpeg" \
-                 ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffprobe"
+          mkdir -p ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}"
+          url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${{ matrix.ffmpeg_asset }}-static.tar.xz"
+          ok=0
+          for i in 1 2 3 4 5; do
+            if curl -fsSL --connect-timeout 30 --max-time 600 --retry 2 --retry-all-errors --retry-delay 10 \
+                 -o /tmp/ffmpeg.tar.xz "$url"; then
+              ok=1; break
+            fi
+            echo "静态 ffmpeg 下载失败（第 $i 次），15s 后重试"; sleep 15
+          done
+          if [ "$ok" = "1" ]; then
+            tar -xJf /tmp/ffmpeg.tar.xz -C ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" --strip-components=1
+            ls -lh ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffmpeg" \
+                   ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}/ffprobe"
+          else
+            # johnvansickle 偶发不可达：降级为不内置（直连播放仍可用），不让整包构建失败
+            echo "::warning::静态 ffmpeg 下载失败，本次不内置：服务端中转模式不可用"
+            rmdir ".nas-build/ffmpeg/${{ matrix.ffmpeg_asset }}" 2>/dev/null || true
+          fi
 
       - name: Pack SPK
         env:
