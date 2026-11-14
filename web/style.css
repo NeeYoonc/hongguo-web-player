@@ -1194,3 +1194,17 @@ button.meta-tag:hover { background: rgba(255, 45, 85, .22); color: #ff8ba0; text
   .rank-actions{flex:0 0 100%;flex-direction:row;justify-content:flex-end;gap:8px;padding-top:2px}
   .rank-actions button{padding:6px 18px;font-size:12.5px}
 }
+
+/* ===== v128 排行榜：修滚动 + 去掉重复入口 =====
+   .view > *{flex-shrink:0} 让 .rank-layout 无法收缩 → .rank-list 被内容撑高，
+   .view 又 overflow:hidden → 手机上列表根本滚不动。这里显式允许收缩，让列表自己滚。 */
+.view-rank{overflow:hidden}
+.rank-layout{flex:1 1 auto;min-height:0;overflow:hidden}
+.rank-main{flex:1 1 auto;min-height:0}
+.rank-list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+
+@media (max-width:900px){
+  /* 手机上「总热播榜/真人剧榜/漫剧榜/AI剧榜」与「全部/真人剧/漫剧/AI剧」是同一组入口，
+     两排都显示会让人以为有两个标题 → 只保留上面那排（接口驱动的榜单条）。 */
+  .rank-tabs{display:none}
+}
