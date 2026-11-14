@@ -4219,6 +4219,21 @@ async function scheduleDirectPrefetch() {
 
 function startDirectVideo(video, url) {
   video.src = url;
+  // ★ 直连（浏览器本地解密）路径必须自己加载弹幕：
+  //   旧实现只在服务器 /dec 路径的 loadedmetadata 里调 dmLoad，直连播放永远没有弹幕。
+  (function loadDanmakuOnce() {
+    let done = false;
+    const fire = function () {
+      if (done) return;
+      done = true;
+      try { dmLoad(playerState.token); } catch (e) { /* 忽略 */ }
+    };
+    if (video.readyState >= 1) fire();
+    else video.addEventListener('loadedmetadata', function once() {
+      video.removeEventListener('loadedmetadata', once);
+      fire();
+    });
+  })();
   video.play().then(function () {
     clog('direct: play() resolved');
   }).catch(function (e) {

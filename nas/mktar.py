@@ -16,6 +16,11 @@ import os
 import posixpath
 import sys
 import tarfile
+import time
+
+# 每次打包写入当前时间：若固定 0，DSM 页面的 Last-Modified 恒为 1970，
+# 浏览器 If-Modified-Since 会一直命中 304 → 升级后仍用旧 app.js（实测踩过）。
+_BUILD_MTIME = int(time.time())
 
 # 外层 spk 必需的条目（顺序与 DSM 规范一致；缺失则跳过）
 SPK_ENTRIES = [
@@ -56,7 +61,7 @@ def add_tree(tar: tarfile.TarFile, src: str, kind: str, prefix: str = "") -> Non
             ti = tarfile.TarInfo(arc + "/")
             ti.type = tarfile.DIRTYPE
             ti.mode = 0o755
-            ti.mtime = 0
+            ti.mtime = _BUILD_MTIME
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = "root"
             tar.addfile(ti)
@@ -68,7 +73,7 @@ def add_tree(tar: tarfile.TarFile, src: str, kind: str, prefix: str = "") -> Non
             ti = tarfile.TarInfo(arc)
             ti.size = st.st_size
             ti.mode = _mode_for(arc, False, kind)
-            ti.mtime = 0
+            ti.mtime = _BUILD_MTIME
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = "root"
             with open(full, "rb") as f:
@@ -90,7 +95,7 @@ def make_spk(assemble: str, out: str) -> None:
                 ti = tarfile.TarInfo(entry + "/")
                 ti.type = tarfile.DIRTYPE
                 ti.mode = 0o755
-                ti.mtime = 0
+                ti.mtime = _BUILD_MTIME
                 ti.uid = ti.gid = 0
                 ti.uname = ti.gname = "root"
                 tar.addfile(ti)
@@ -100,7 +105,7 @@ def make_spk(assemble: str, out: str) -> None:
                 ti = tarfile.TarInfo(entry)
                 ti.size = st.st_size
                 ti.mode = _mode_for(entry, False, "spk")
-                ti.mtime = 0
+                ti.mtime = _BUILD_MTIME
                 ti.uid = ti.gid = 0
                 ti.uname = ti.gname = "root"
                 with open(full, "rb") as f:
