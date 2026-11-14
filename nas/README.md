@@ -11,6 +11,8 @@
 
 `INFO` 写入 `install_dep_packages="ffmpeg7:Node.js_v22"` —— **缺任一依赖，套件中心拒绝安装**。
 
+套件源：`https://ssp.dnof.net/`（套件中心 → 设置 → 套件来源 → 新增，自动同步本仓 Release）。
+
 ## 包内容
 
 ```
