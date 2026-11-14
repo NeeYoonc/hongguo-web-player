@@ -221,7 +221,7 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		items, total, derr := fetchDanmaku(vid, sid, int64(startMs), int64(durMs), cookieMap)
-		log.Printf("danmaku sid=%s vid=%s items=%d total=%d err=%v", sid, vid, len(items), total, derr)
+		log.Printf("danmaku sid=%s vid=%s cookies=%d items=%d total=%d err=%v", sid, vid, len(cookieMap), len(items), total, derr)
 		if derr != nil {
 			writeJSON(w, 200, map[string]any{"ok": false, "error": derr.Error()})
 			return

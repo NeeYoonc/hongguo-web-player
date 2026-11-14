@@ -1812,10 +1812,10 @@ async function dmLoad(token, force) {
   dmItems = [];
   dmIndex = 0;
   dmClear();
-  if (!dm.on && !force) return;
+  if (!dm.on && !force) { clog('danmaku 跳过: 弹幕开关关闭'); return; }
   const sid = seriesIDOf(state.drama);
   const vid = currentVideoID();
-  if (!sid || !vid) return;
+  if (!sid || !vid) { clog('danmaku 跳过: sid=' + sid + ' vid=' + vid); return; }
   dmLoadedToken = token;
   const video = $('video');
   const end = Math.max(60000, Math.ceil((isFinite(video.duration) && video.duration > 0 ? video.duration : 300) * 1000));
