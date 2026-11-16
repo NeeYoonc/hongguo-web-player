@@ -107,6 +107,7 @@ jobs:
           DEP_PKG="${DEP_PKG}" \
           BIN=".nas-build/bin/hongguoweb" \
           WASM=".nas-build/web/ffmpeg-core.wasm" \
+          SIDECAR=".nas-build/bin/hg-resolve" \
           bash nas/pack-spk.sh
 
       - name: Upload artifact
