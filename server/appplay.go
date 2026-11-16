@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type appPlayInfo struct {
 	Definition int    `json:"definition"`
 	KeyHex     string `json:"key_hex"`
 	CENCKeyHex string `json:"cenc_key_hex"`
+	Qualities  []int  `json:"qualities"`
 	FetchedAt  time.Time
 }
 
@@ -65,13 +67,18 @@ func sidecarDeviceFile() string {
 }
 
 // resolveAppPlay 调侧车取一集播放地址（含派生后的 CENC 密钥）。
-func resolveAppPlay(ctx context.Context, sid, vid string) (*appPlayInfo, error) {
+func resolveAppPlay(ctx context.Context, sid, vid string, def int) (*appPlayInfo, error) {
 	if sid == "" || vid == "" {
 		return nil, errors.New("缺少剧集 id")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, sidecarBin(), sid, vid, "--device", sidecarDeviceFile())
+	args := []string{sid, vid}
+	if def > 0 {
+		args = append(args, strconv.Itoa(def))
+	}
+	args = append(args, "--device", sidecarDeviceFile())
+	cmd := exec.CommandContext(ctx, sidecarBin(), args...)
 	cmd.Env = append(os.Environ(), "NO_COLOR=1")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -98,8 +105,9 @@ func resolveAppPlay(ctx context.Context, sid, vid string) (*appPlayInfo, error) 
 		Enc     bool   `json:"encrypted"`
 		Codec   string `json:"codec"`
 		Def     int    `json:"definition"`
-		KeyHex  string `json:"key_hex"`
-		CencKey string `json:"cenc_key_hex"`
+		KeyHex    string `json:"key_hex"`
+		CencKey   string `json:"cenc_key_hex"`
+		Qualities []int  `json:"qualities"`
 	}
 	if err := json.Unmarshal([]byte(last), &info); err != nil {
 		return nil, fmt.Errorf("取流侧车返回异常: %v", err)
@@ -121,6 +129,7 @@ func resolveAppPlay(ctx context.Context, sid, vid string) (*appPlayInfo, error) 
 		Definition: info.Def,
 		KeyHex:     info.KeyHex,
 		CENCKeyHex: info.CencKey,
+		Qualities:  info.Qualities,
 		FetchedAt:  time.Now(),
 	}, nil
 }
@@ -132,19 +141,23 @@ var (
 
 const appPlayTTL = 45 * time.Minute
 
-func cachedAppPlay(sid, vid string) *appPlayInfo {
+func appPlayKey(sid, vid string, def int) string {
+	return sid + "|" + vid + "|" + strconv.Itoa(def)
+}
+
+func cachedAppPlay(sid, vid string, def int) *appPlayInfo {
 	appPlayMu.Lock()
 	defer appPlayMu.Unlock()
-	key := sid + "|" + vid
+	key := appPlayKey(sid, vid, def)
 	if info, ok := appPlayCache[key]; ok && time.Since(info.FetchedAt) < appPlayTTL {
 		return info
 	}
 	return nil
 }
 
-func storeAppPlay(sid, vid string, info *appPlayInfo) {
+func storeAppPlay(sid, vid string, def int, info *appPlayInfo) {
 	appPlayMu.Lock()
-	appPlayCache[sid+"|"+vid] = info
+	appPlayCache[appPlayKey(sid, vid, def)] = info
 	appPlayMu.Unlock()
 }
 
@@ -152,21 +165,22 @@ func storeAppPlay(sid, vid string, info *appPlayInfo) {
 func handleAppPlay(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/appplay/")
 	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || !isDigits(parts[0]) || !isDigits(parts[1]) {
+	if len(parts) != 3 || !isDigits(parts[0]) || !isDigits(parts[1]) || !isDigits(parts[2]) {
 		http.Error(w, "bad appplay path", http.StatusBadRequest)
 		return
 	}
 	sid, vid := parts[0], parts[1]
-	info := cachedAppPlay(sid, vid)
+	def, _ := strconv.Atoi(parts[2])
+	info := cachedAppPlay(sid, vid, def)
 	if info == nil {
-		resolved, err := resolveAppPlay(r.Context(), sid, vid)
+		resolved, err := resolveAppPlay(r.Context(), sid, vid, def)
 		if err != nil {
 			log.Printf("appplay 取流失败 sid=%s vid=%s err=%v", sid, vid, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		info = resolved
-		storeAppPlay(sid, vid, info)
+		storeAppPlay(sid, vid, def, info)
 	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, info.URL, nil)
 	if err != nil {
@@ -198,14 +212,23 @@ func appResolveFallback(ctx context.Context, payload map[string]any) ([]byte, er
 	chapter, _ := payload["chapter"].(map[string]any)
 	sid := strings.TrimPrefix(asString(drama["id"]), "hongguo:")
 	vid := strings.TrimPrefix(asString(chapter["videoUrl"]), "hongguo-cenc://")
-	info, err := resolveAppPlay(ctx, sid, vid)
+	requested := 0
+	if q, ok := payload["quality"].(float64); ok {
+		requested = int(q)
+	}
+	info, err := resolveAppPlay(ctx, sid, vid, requested)
 	if err != nil {
 		return nil, err
 	}
-	storeAppPlay(sid, vid, info)
+	storeAppPlay(sid, vid, requested, info)
+	qualities := info.Qualities
+	if len(qualities) == 0 {
+		qualities = []int{info.Definition}
+	}
 	data := map[string]any{
-		"url":           fmt.Sprintf("http://127.0.0.1:%d/appplay/%s/%s", listenPort, sid, vid),
+		"url":           fmt.Sprintf("http://127.0.0.1:%d/appplay/%s/%s/%d", listenPort, sid, vid, requested),
 		"quality":       info.Definition,
+		"qualities":     qualities,
 		"decryptionKey": info.CENCKeyHex,
 		"codec":         info.Codec,
 		"encrypted":     info.Encrypted,

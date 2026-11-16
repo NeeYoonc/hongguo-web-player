@@ -109,6 +109,11 @@ async fn main() {
                 "definition": info.definition,
                 "key_hex": hex::encode(&info.key_material),
                 "file_hash": info.file_hash,
+                "qualities": info
+                    .definitions
+                    .iter()
+                    .map(|d| d.value)
+                    .collect::<Vec<_>>(),
             });
             println!("{out}");
         }
