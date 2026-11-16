@@ -256,23 +256,41 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 		body, _ = json.Marshal(payload)
 	}
 	start := time.Now()
-	response := core.NativeRequest(string(body))
+	action, _ := payload["action"].(string)
 	var res struct {
 		Ok    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	_ = json.Unmarshal([]byte(response), &res)
-	action, _ := payload["action"].(string)
-	// 红果 App 取流被收紧（MetaSec v5）后，用 Rust 侧车复用官方 App 通道兜底。
-	if !res.Ok && (action == "resolve" || action == "fallback") {
-		if fallback, ferr := appResolveFallback(r.Context(), payload); ferr == nil {
-			response = string(fallback)
-			res.Ok, res.Error = true, ""
-			log.Printf("resolve fallback=app-v5 命中")
-		} else {
-			log.Printf("resolve fallback=app-v5 失败: %v", ferr)
+	response := ""
+
+	// 预取：官方 App 通道预热下一集地址（前端用的是 action=preload）
+	if action == "preload" && sidecarReady() {
+		if out, ok := appPreload(r.Context(), payload); ok {
+			response = string(out)
 		}
 	}
+
+	// 侧车优先：旧通道对已收紧的接口要重试 2.5~4s 才失败，直接走官方 App 通道
+	if response == "" && (action == "resolve" || action == "fallback") && sidecarReady() {
+		if plan, ferr := appResolveFallback(r.Context(), payload); ferr == nil {
+			response = string(plan)
+		} else {
+			log.Printf("resolve sidecar-first 失败，回退 core: %v", ferr)
+		}
+	}
+
+	if response == "" {
+		response = core.NativeRequest(string(body))
+		_ = json.Unmarshal([]byte(response), &res)
+		if !res.Ok && (action == "resolve" || action == "fallback") && sidecarReady() {
+			if fallback, ferr := appResolveFallback(r.Context(), payload); ferr == nil {
+				response = string(fallback)
+			} else {
+				log.Printf("resolve fallback=app-v5 失败: %v", ferr)
+			}
+		}
+	}
+	_ = json.Unmarshal([]byte(response), &res)
 	log.Printf("api action=%s ok=%v err=%q %s", action, res.Ok, res.Error, time.Since(start).Round(time.Millisecond))
 	if strings.HasPrefix(action, "hgLogin") {
 		if len(response) > 600 {

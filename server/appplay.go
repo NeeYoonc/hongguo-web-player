@@ -1,17 +1,20 @@
 package main
 
-// App 接口取流回落（2026-11-16 起红果收紧后的正式通道）
+// App 接口取流通道（2026-11-16 起红果收紧后的正式通路）
 //
 // 背景：红果 App 取流接口对旧签名（Gorgon/Argus/Ladon）返回 200 空体，网页端
 // `_ROUTER_DATA` 也不再带播放地址。官方 App 仍能播，说明新通道是 MetaSec v5 签名
-// + sinfonlinea 域（APK 内 `api5-normal-sinfonlinea` 出现 13 次、sinfonlineb 仅 1 次）。
+// + sinfonlinea 域。
 //
-// 本文件不重新实现 v5 签名，而是旁路复用已验证可用的 Rust 实现：
-//   - 侧车 `hg-resolve`（由 hongguo-desktop 的 hongguo-signer/hongguo-api 编成的小 CLI）
-//     负责：注册匿名设备 → 拉分集详情注册 content_type → v5 取流 → 派生 CENC 密钥；
-//   - 输出一行 JSON：{ok,url,encrypted,codec,definition,key_hex,cenc_key_hex}
-//   - 服务端把 CDN 地址包成 /appplay/<sid>/<vid> 反向代理，前端沿用既有 /dec 通道
-//     （plan.decryptionKey = cenc_key_hex，由 ffmpeg -decryption_key 解密）。
+// 本文件不重新实现 v5 签名，而是旁路复用 vendor 进仓库的 Rust 实现（nas/vendor）：
+//   - 侧车 `hg-resolve`：匿名设备注册 → 详情注册 content_type → v5 取流 → 派生 CENC 密钥
+//   - 输出一行 JSON：{ok,url,encrypted,codec,definition,qualities,key_hex,cenc_key_hex,content_type}
+//   - 服务端把 CDN 地址包成 /appplay/<sid>/<vid>/<def> 反向代理，前端沿用既有 /dec 链路
+//
+// 性能要点（实测 NAS）：
+//   - core 的旧通道失败重试要 2.5~4s，侧车只要 ~1.3s → 默认侧车优先
+//   - 侧车每集都拉详情 +1s → 按剧缓存 content_type，后续用 --ct 跳过
+//   - 前端预取走 action=preload（不是 resolve）→ 这里也接上，把下一集 URL 预热进缓存
 
 import (
 	"context"
@@ -33,14 +36,15 @@ import (
 const appPlayUA = "Mozilla/5.0 (Linux; Android 12; SM-A556B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36"
 
 type appPlayInfo struct {
-	URL        string `json:"url"`
-	Encrypted  bool   `json:"encrypted"`
-	Codec      string `json:"codec"`
-	Definition int    `json:"definition"`
-	KeyHex     string `json:"key_hex"`
-	CENCKeyHex string `json:"cenc_key_hex"`
-	Qualities  []int  `json:"qualities"`
-	FetchedAt  time.Time
+	URL         string `json:"url"`
+	Encrypted   bool   `json:"encrypted"`
+	Codec       string `json:"codec"`
+	Definition  int    `json:"definition"`
+	KeyHex      string `json:"key_hex"`
+	CENCKeyHex  string `json:"cenc_key_hex"`
+	ContentType int    `json:"content_type"`
+	Qualities   []int  `json:"qualities"`
+	FetchedAt   time.Time
 }
 
 func sidecarBin() string {
@@ -56,6 +60,18 @@ func sidecarBin() string {
 	return "hg-resolve"
 }
 
+// sidecarReady：侧车存在且未被显式禁用（HONGGUO_RESOLVE_FIRST=0 可强制回旧顺序）。
+func sidecarReady() bool {
+	if strings.TrimSpace(os.Getenv("HONGGUO_RESOLVE_FIRST")) == "0" {
+		return false
+	}
+	if _, err := exec.LookPath(sidecarBin()); err == nil {
+		return true
+	}
+	_, err := os.Stat(sidecarBin())
+	return err == nil
+}
+
 func sidecarDeviceFile() string {
 	if v := strings.TrimSpace(os.Getenv("HONGGUO_DEVICE_JSON")); v != "" {
 		return v
@@ -64,6 +80,26 @@ func sidecarDeviceFile() string {
 		return filepath.Join(dataRoot, "hg-device.json")
 	}
 	return "hg-device.json"
+}
+
+var (
+	seriesCTMu sync.Mutex
+	seriesCT   = map[string]int{}
+)
+
+func cachedContentType(sid string) int {
+	seriesCTMu.Lock()
+	defer seriesCTMu.Unlock()
+	return seriesCT[sid]
+}
+
+func rememberContentType(sid string, ct int) {
+	if sid == "" || ct <= 0 {
+		return
+	}
+	seriesCTMu.Lock()
+	seriesCT[sid] = ct
+	seriesCTMu.Unlock()
 }
 
 // resolveAppPlay 调侧车取一集播放地址（含派生后的 CENC 密钥）。
@@ -77,7 +113,11 @@ func resolveAppPlay(ctx context.Context, sid, vid string, def int) (*appPlayInfo
 	if def > 0 {
 		args = append(args, strconv.Itoa(def))
 	}
+	if ct := cachedContentType(sid); ct > 0 {
+		args = append(args, "--ct", strconv.Itoa(ct))
+	}
 	args = append(args, "--device", sidecarDeviceFile())
+
 	cmd := exec.CommandContext(ctx, sidecarBin(), args...)
 	cmd.Env = append(os.Environ(), "NO_COLOR=1")
 	var stderr strings.Builder
@@ -93,21 +133,22 @@ func resolveAppPlay(ctx context.Context, sid, vid string, def int) (*appPlayInfo
 	}
 	if last == "" {
 		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
+		if msg == "" && err != nil {
 			msg = err.Error()
 		}
 		return nil, fmt.Errorf("取流侧车无输出: %s", truncate(msg, 300))
 	}
 	var info struct {
-		OK      bool   `json:"ok"`
-		Error   string `json:"error"`
-		URL     string `json:"url"`
-		Enc     bool   `json:"encrypted"`
-		Codec   string `json:"codec"`
-		Def     int    `json:"definition"`
-		KeyHex    string `json:"key_hex"`
-		CencKey   string `json:"cenc_key_hex"`
-		Qualities []int  `json:"qualities"`
+		OK          bool   `json:"ok"`
+		Error       string `json:"error"`
+		URL         string `json:"url"`
+		Enc         bool   `json:"encrypted"`
+		Codec       string `json:"codec"`
+		Def         int    `json:"definition"`
+		KeyHex      string `json:"key_hex"`
+		CencKey     string `json:"cenc_key_hex"`
+		ContentType int    `json:"content_type"`
+		Qualities   []int  `json:"qualities"`
 	}
 	if err := json.Unmarshal([]byte(last), &info); err != nil {
 		return nil, fmt.Errorf("取流侧车返回异常: %v", err)
@@ -122,15 +163,17 @@ func resolveAppPlay(ctx context.Context, sid, vid string, def int) (*appPlayInfo
 	if info.CencKey == "" && info.KeyHex != "" {
 		info.CencKey = info.KeyHex
 	}
+	rememberContentType(sid, info.ContentType)
 	return &appPlayInfo{
-		URL:        info.URL,
-		Encrypted:  info.Enc,
-		Codec:      info.Codec,
-		Definition: info.Def,
-		KeyHex:     info.KeyHex,
-		CENCKeyHex: info.CencKey,
-		Qualities:  info.Qualities,
-		FetchedAt:  time.Now(),
+		URL:         info.URL,
+		Encrypted:   info.Enc,
+		Codec:       info.Codec,
+		Definition:  info.Def,
+		KeyHex:      info.KeyHex,
+		CENCKeyHex:  info.CencKey,
+		ContentType: info.ContentType,
+		Qualities:   info.Qualities,
+		FetchedAt:   time.Now(),
 	}, nil
 }
 
@@ -148,8 +191,7 @@ func appPlayKey(sid, vid string, def int) string {
 func cachedAppPlay(sid, vid string, def int) *appPlayInfo {
 	appPlayMu.Lock()
 	defer appPlayMu.Unlock()
-	key := appPlayKey(sid, vid, def)
-	if info, ok := appPlayCache[key]; ok && time.Since(info.FetchedAt) < appPlayTTL {
+	if info, ok := appPlayCache[appPlayKey(sid, vid, def)]; ok && time.Since(info.FetchedAt) < appPlayTTL {
 		return info
 	}
 	return nil
@@ -161,7 +203,7 @@ func storeAppPlay(sid, vid string, def int, info *appPlayInfo) {
 	appPlayMu.Unlock()
 }
 
-// handleAppPlay 反向代理红果 CDN 流：/appplay/<sid>/<vid>，透传 Range。
+// handleAppPlay 反向代理红果 CDN 流：/appplay/<sid>/<vid>/<def>，透传 Range。
 func handleAppPlay(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/appplay/")
 	parts := strings.Split(rest, "/")
@@ -206,21 +248,18 @@ func handleAppPlay(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// appResolveFallback：core resolve 失败时，用 App 侧车构造与 core 同形的响应。
-func appResolveFallback(ctx context.Context, payload map[string]any) ([]byte, error) {
+func resolveTarget(payload map[string]any) (sid, vid string, def int) {
 	drama, _ := payload["drama"].(map[string]any)
 	chapter, _ := payload["chapter"].(map[string]any)
-	sid := strings.TrimPrefix(asString(drama["id"]), "hongguo:")
-	vid := strings.TrimPrefix(asString(chapter["videoUrl"]), "hongguo-cenc://")
-	requested := 0
+	sid = strings.TrimPrefix(asString(drama["id"]), "hongguo:")
+	vid = strings.TrimPrefix(asString(chapter["videoUrl"]), "hongguo-cenc://")
 	if q, ok := payload["quality"].(float64); ok {
-		requested = int(q)
+		def = int(q)
 	}
-	info, err := resolveAppPlay(ctx, sid, vid, requested)
-	if err != nil {
-		return nil, err
-	}
-	storeAppPlay(sid, vid, requested, info)
+	return
+}
+
+func appPlanJSON(sid, vid string, requested int, info *appPlayInfo) ([]byte, error) {
 	qualities := info.Qualities
 	if len(qualities) == 0 {
 		qualities = []int{info.Definition}
@@ -238,11 +277,36 @@ func appResolveFallback(ctx context.Context, payload map[string]any) ([]byte, er
 	return json.Marshal(map[string]any{"ok": true, "data": data})
 }
 
-func truncate(text string, n int) string {
-	if len(text) <= n {
-		return text
+// appResolveFallback：core resolve 失败（或侧车优先）时构造与 core 同形的响应。
+func appResolveFallback(ctx context.Context, payload map[string]any) ([]byte, error) {
+	sid, vid, def := resolveTarget(payload)
+	if info := cachedAppPlay(sid, vid, def); info != nil {
+		return appPlanJSON(sid, vid, def, info)
 	}
-	return text[:n]
+	info, err := resolveAppPlay(ctx, sid, vid, def)
+	if err != nil {
+		return nil, err
+	}
+	storeAppPlay(sid, vid, def, info)
+	return appPlanJSON(sid, vid, def, info)
+}
+
+// appPreload 预热下一集：只解析地址并放进缓存，不下载字节（前端随后 resolve 命中缓存）。
+func appPreload(ctx context.Context, payload map[string]any) ([]byte, bool) {
+	sid, vid, def := resolveTarget(payload)
+	if sid == "" || vid == "" {
+		return nil, false
+	}
+	if info := cachedAppPlay(sid, vid, def); info != nil {
+		return []byte(`{"ok":true,"data":{"prefetchedBytes":0,"session":"app-` + sid + "-" + vid + `"}}`), true
+	}
+	info, err := resolveAppPlay(ctx, sid, vid, def)
+	if err != nil {
+		log.Printf("preload 预热失败 sid=%s vid=%s err=%v", sid, vid, err)
+		return nil, false
+	}
+	storeAppPlay(sid, vid, def, info)
+	return []byte(`{"ok":true,"data":{"prefetchedBytes":0,"session":"app-` + sid + "-" + vid + `"}}`), true
 }
 
 func isDigits(s string) bool {
@@ -262,4 +326,11 @@ func asString(v any) string {
 		return s
 	}
 	return ""
+}
+
+func truncate(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	return text[:n]
 }
