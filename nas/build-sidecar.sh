@@ -18,6 +18,10 @@ OUT="${OUT:-$BUILD_ROOT/bin/hg-resolve-$(echo "$TARGET" | cut -d- -f1)}"
 WORK="${WORK:-$BUILD_ROOT/sidecar-src}"
 
 mkdir -p "$(dirname "$OUT")"
+# OUT/WORK 预先转成绝对路径：脚本后面会 cd 进 WORK，相对路径会落错目录
+OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
+mkdir -p "$(dirname "$WORK")"
+WORK="$(cd "$(dirname "$WORK")" && pwd)/$(basename "$WORK")"
 rm -rf "$WORK"
 echo "[sidecar] 克隆参考实现 @ $REF_COMMIT"
 git clone --filter=blob:none --no-checkout "$REF_REPO" "$WORK" >/dev/null 2>&1
