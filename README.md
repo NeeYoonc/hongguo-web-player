@@ -42,6 +42,7 @@
 - **详情页**：主创/演员、备案号、标签、选集（序号+时长）、相关推荐；点演员进创作者主页。
 - **新剧**：新剧推荐（按上线时间、男频/女频）+ 上新日历（15 天日期条、预约数）。
 - **播放器**：自绘控制条、选集区间、倍速、清晰度、**弹幕（含 53 个表情）**、评论抽屉、右侧点赞/评论/收藏；PC 与手机自适应。
+- **GPU 超分辨率**：WebGL2 两趟 shader（Catmull-Rom 重建放大 + CAS 对比度自适应锐化）实时渲染到屏幕原生分辨率（HiDPI 最多 2x），全程 GPU、不占 CPU；播放器设置里开关与锐度可调。
 - **直连播放**：浏览器 fetch 红果 CDN + 套件内置的 ffmpeg.wasm 本地解密（HEVC/AAC → fMP4），不经过服务器中转；也可切回服务器中转（用依赖套件的 ffmpeg）。
 - **官方 App 取流通道（v1.0.0-14 起）**：红果 2026-11-16 收紧旧签名后，取流改由随包分发的 `hg-resolve` 侧车完成——匿名注册设备 → 拉分集详情注册条目类型 → 按官方 App v5 协议（MetaSec v5 + `sinfonlinea` 域）取流 → 派生 CENC 密钥。**不需要登录**，首次播放会注册一台设备（档案存在 `var/hg-device.json`，升级保留）。网页端 `_ROUTER_DATA` 回落已移除（那里现在只有加密流）。
 - **本机账号**：侧栏底部可注册/登录本站账号（收藏、点赞、历史按账号隔离）。
@@ -107,5 +108,6 @@ cd nas/assets/danmu && npm install --omit=dev --no-audit --no-fund
 
 - v126：观看进度写回红果账号（`/reading/bookapi/read_history/update/v` + `/reading/bookapi/read_progress/upload/v`）；历史页本地进度与账号进度按时间合并。
 - v119–v122：浏览器端 ffmpeg.wasm 本地解密直连播放（CENC/H.265），解密缓存与下一集预解密。
+- v1.0.0-21：GPU 超分辨率（WebGL2 重建 + CAS 锐化，替换原先占 CPU 的 SVG 卷积滤镜）。
 - v1.0.0-14 ~ -17：适配红果 11-16 取流收紧 —— 侧车 `hg-resolve` 复用官方 App v5 通道（MetaSec v5 + sinfonlinea + gzip body + token 前 56 位），服务端 `/appplay/<sid>/<vid>` 反向代理 CDN 流，剩余解密链路不变；移除失效的网页回落。
 - v112：登录会话改存浏览器 localStorage（`hg:cookies`），服务端不再落盘。

@@ -317,13 +317,12 @@
   </div>
 </div>
 
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="hg-sharpen" color-interpolation-filters="sRGB"><feConvolveMatrix order="3" kernelMatrix="0 -0.35 0 -0.35 2.4 -0.35 0 -0.35 0" preserveAlpha="true"/></filter></svg>
 <div id="settings-modal" class="modal" hidden>
   <div class="sheet-panel settings-panel">
     <div class="sheet-head"><b>设置</b><button class="sheet-close" id="st-close" type="button">✕</button></div>
     <div class="st-group">
       <div class="st-row"><div><b>默认清晰度</b><p>自动=最高档（1080P）</p></div><select id="st-quality"><option value="0">自动（最高）</option><option value="1080">1080P</option><option value="720">720P</option><option value="540">540P</option><option value="480">480P</option></select></div>
-      <div class="st-row"><div><b>超分辨率</b><p>低清画面锐化放大（实验性，占用少量 CPU）</p></div><label class="switch"><input type="checkbox" id="st-sr"><i></i></label></div>
+      <div class="st-row"><div><b>GPU 超分辨率</b><p>WebGL2 实时重建放大 + 对比度自适应锐化，全程 GPU、不占 CPU；输出到屏幕原生分辨率</p></div><label class="switch"><input type="checkbox" id="st-sr"><i></i></label></div>
       <div class="st-row"><div><b>直连播放</b><p>客户端直接从红果 CDN 拉流，在浏览器本地解密播放（不经过宿主机；首次需下载约 32MB 解密模块）</p></div><label class="switch"><input type="checkbox" id="st-direct"><i></i></label></div>
       <div class="st-row"><div><b>锐化强度</b><p>超分辨率开启后生效</p></div><select id="st-sharpen"><option value="light">轻度</option><option value="mid">中等</option><option value="strong">强</option></select></div>
       <div class="st-row"><div><b>自动连播</b><p>一集播完自动下一集</p></div><label class="switch"><input type="checkbox" id="st-auto"><i></i></label></div>
@@ -332,6 +331,7 @@
   </div>
 </div>
 <div id="toast" class="toast" hidden></div>
+<script src="/sr.js?v=1"></script>
 <script src="/app.js?v=126"></script>
 </body>
 </html>

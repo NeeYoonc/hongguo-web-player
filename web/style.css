@@ -1208,3 +1208,13 @@ button.meta-tag:hover { background: rgba(255, 45, 85, .22); color: #ff8ba0; text
      两排都显示会让人以为有两个标题 → 只保留上面那排（接口驱动的榜单条）。 */
   .rank-tabs{display:none}
 }
+
+/* GPU 超分画布：覆盖在视频内容区，弹幕层在其上 */
+#p-sr {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  z-index: 1;
+  background: #000;
+}
+.danmaku-layer { z-index: 2; }

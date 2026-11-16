@@ -1192,6 +1192,7 @@ MseStream.prototype.handleSeeking = function () {
 };
 
 function teardownPlayer() {
+  if (window.HGSuperRes) window.HGSuperRes.disable();
   const video = $('video');
   if (playerState.mse) { playerState.mse.destroy(); playerState.mse = null; }
   video.onloadedmetadata = null;
@@ -1393,6 +1394,7 @@ function schedulePrefetch() {
 async function applyPlan(plan, startTime) {
   try {
     const token = ++playerState.token;
+    applyPictureEnhance();
     updateCommentCount();
     renderQuality();
     if (await tryDirectPlay(plan, startTime || 0)) {
@@ -3109,19 +3111,52 @@ function saveSettings() {
   try { localStorage.setItem('hg:settings', JSON.stringify(settingsState)); } catch (e) { /* 忽略 */ }
 }
 
-function sharpenFilter() {
-  if (!settingsState.sr) return '';
-  const k = settingsState.sharpen === 'strong' ? 3.2 : settingsState.sharpen === 'light' ? 1.7 : 2.4;
-  const a = -((k - 1) / 4);
-  const el = document.querySelector('#hg-sharpen feConvolveMatrix');
-  if (el) el.setAttribute('kernelMatrix', `0 ${a} 0 ${a} ${k} ${a} 0 ${a} 0`);
-  return 'url(#hg-sharpen)';
+// —— GPU 超分（WebGL2，实现在 sr.js）：重建放大 + CAS 锐化，全程 GPU ——
+function ensureSrCanvas(show) {
+  const box = document.querySelector('.player-video');
+  if (!box) return null;
+  let canvas = document.getElementById('p-sr');
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.id = 'p-sr';
+    const video = document.getElementById('video');
+    if (video && video.parentNode === box) video.insertAdjacentElement('afterend', canvas);
+    else box.appendChild(canvas);
+  }
+  canvas.style.display = show ? 'block' : 'none';
+  return canvas;
+}
+
+function srSharpness() {
+  if (settingsState.sharpen === 'strong') return 1.0;
+  if (settingsState.sharpen === 'light') return 0.4;
+  return 0.7;
+}
+
+function disablePictureEnhance() {
+  if (window.HGSuperRes) window.HGSuperRes.disable();
+  const canvas = document.getElementById('p-sr');
+  if (canvas) canvas.style.display = 'none';
+  const v = document.getElementById('video');
+  if (v) { v.style.opacity = ''; v.style.filter = ''; }
 }
 
 function applyPictureEnhance() {
   const v = document.getElementById('video');
   if (!v) return;
-  v.style.filter = sharpenFilter();
+  v.style.filter = ''; // 旧的 SVG 卷积滤镜走 CPU，已废弃
+  if (!settingsState.sr) { disablePictureEnhance(); return; }
+  const canvas = ensureSrCanvas(true);
+  if (!canvas || !window.HGSuperRes) return;
+  const ok = window.HGSuperRes.enable(v, canvas, { sharp: srSharpness() });
+  if (!ok) {
+    disablePictureEnhance();
+    if (!window.__srWarned) {
+      window.__srWarned = true;
+      const msg = (window.HGSuperRes && window.HGSuperRes.status().error) || '当前浏览器或显卡不支持 WebGL2';
+      toast('GPU 超分不可用：' + msg);
+    }
+  }
 }
 
 function openSettings() {
@@ -4311,6 +4346,11 @@ window.addEventListener('error', (event) => {
   clog('window error: ' + (event.message || '') + ' @' + (event.filename || '') + ':' + (event.lineno || 0));
 });
 
+if (window.HGSuperRes) {
+  window.addEventListener('resize', function () { if (settingsState.sr) window.HGSuperRes.layout(); });
+  document.addEventListener('fullscreenchange', function () { if (settingsState.sr) window.HGSuperRes.layout(); });
+}
+applyPictureEnhance();
 dmApplyStyle();
 clog('页面加载 v8 ' + location.href);
 bindEvents();
