@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,7 +25,8 @@ import (
 )
 
 var (
-	sequence atomic.Int64
+	listenPort int
+	sequence   atomic.Int64
 	stream   = &http.Client{Transport: &http.Transport{
 		Proxy:                 nil,
 		MaxIdleConns:          32,
@@ -41,6 +43,11 @@ func main() {
 	web := flag.String("web", "./web", "静态页面目录")
 	cache := flag.String("cache", "./cache", "转码/解密缓存目录")
 	flag.Parse()
+	if _, portText, splitErr := net.SplitHostPort(*addr); splitErr == nil {
+		if parsedPort, convErr := strconv.Atoi(portText); convErr == nil {
+			listenPort = parsedPort
+		}
+	}
 	dataRoot = *data
 	webDir = *web
 
@@ -86,6 +93,7 @@ func main() {
 	mux.HandleFunc("/rs/", handleStream)
 	mux.HandleFunc("/probe", handleProbe)
 	mux.HandleFunc("/dec", handleDec)
+	mux.HandleFunc("/appplay/", handleAppPlay)
 	mux.HandleFunc("/tc", handleTranscode)
 	mux.HandleFunc("/clientlog", handleClientLog)
 	mux.HandleFunc("/comments", handleComments)
@@ -255,6 +263,16 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal([]byte(response), &res)
 	action, _ := payload["action"].(string)
+	// 红果 App 取流被收紧（MetaSec v5）后，用 Rust 侧车复用官方 App 通道兜底。
+	if !res.Ok && (action == "resolve" || action == "fallback") {
+		if fallback, ferr := appResolveFallback(r.Context(), payload); ferr == nil {
+			response = string(fallback)
+			res.Ok, res.Error = true, ""
+			log.Printf("resolve fallback=app-v5 命中")
+		} else {
+			log.Printf("resolve fallback=app-v5 失败: %v", ferr)
+		}
+	}
 	log.Printf("api action=%s ok=%v err=%q %s", action, res.Ok, res.Error, time.Since(start).Round(time.Millisecond))
 	if strings.HasPrefix(action, "hgLogin") {
 		if len(response) > 600 {

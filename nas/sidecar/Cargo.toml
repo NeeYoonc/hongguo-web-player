@@ -1,0 +1,16 @@
+[package]
+name = "hg-resolve"
+description = "红果取流侧车：匿名（免登录）调用官方 App v5 接口取一集播放地址并派生 CENC 密钥"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+hongguo-api = { path = "../hongguo-api" }
+hongguo-signer = { path = "../hongguo-signer" }
+hongguo-video = { path = "../hongguo-video" }
+serde_json = "1"
+hex = "0.4"
+tokio = { version = "1", features = ["full"] }

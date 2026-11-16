@@ -42,6 +42,7 @@ BUILD_ROOT="${BUILD_ROOT:-$PROJECT_DIR/.nas-build}"
 OUT_DIR="${OUT_DIR:-$PROJECT_DIR/dist}"
 BIN="${BIN:-$BUILD_ROOT/bin/hongguoweb-$BIN_ARCH}"
 WASM="${WASM:-$BUILD_ROOT/web/ffmpeg-core.wasm}"
+SIDECAR="${SIDECAR:-$BUILD_ROOT/bin/hg-resolve-$BIN_ARCH}"
 ASSETS="$NAS_DIR/assets"
 
 [ -f "$ASSETS/PACKAGE_ICON.PNG" ] || { echo "[!] 缺少图标，先运行 python nas/make-icons.py" >&2; exit 1; }
@@ -60,6 +61,13 @@ mkdir -p "$TARGET/bin" "$TARGET/web" "$ASSEMBLE/conf" "$ASSEMBLE/scripts" \
 # ── target：bin/hongguoweb + web/（不含 ffmpeg） ────────────────────────────────
 cp "$BIN" "$TARGET/bin/hongguoweb"
 chmod 755 "$TARGET/bin/hongguoweb"
+if [ -f "$SIDECAR" ]; then
+  cp "$SIDECAR" "$TARGET/bin/hg-resolve"
+  chmod 755 "$TARGET/bin/hg-resolve"
+  echo "  ✓ 内置取流侧车 hg-resolve ($(du -h "$SIDECAR" | cut -f1))"
+else
+  echo "  ! 未内置 hg-resolve（$SIDECAR 缺失）：App 取流回落不可用"
+fi
 cp -a "$PROJECT_DIR/web/." "$TARGET/web/"
 find "$TARGET/web" -name '*.bak' -delete 2>/dev/null || true
 mkdir -p "$TARGET/web/assets/ffmpeg"
@@ -157,6 +165,9 @@ PID="$VAR/hongguoweb.pid"
 LOG="$VAR/hongguoweb.log"
 PORT_FILE="$VAR/ports"
 DEFAULT_PORT=8788
+# 取流侧车（官方 App v5 通道）：二进制随 target 安装，设备档案放 var（升级保留）
+export HONGGUO_RESOLVE_BIN="$BASE/bin/hg-resolve"
+export HONGGUO_DEVICE_JSON="$VAR/hg-device.json"
 DEP_PKG="__DEP_PKG__"
 
 resolve_port() {

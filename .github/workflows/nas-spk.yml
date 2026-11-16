@@ -60,6 +60,21 @@ jobs:
           cd server
           go build -trimpath -buildvcs=false -ldflags '-s -w' -o ../.nas-build/bin/hongguoweb .
 
+      - name: Build sidecar hg-resolve (App v5 取流)
+        env:
+          ARCH_NAME: ${{ matrix.arch }}
+        run: |
+          # x86_64：本机 musl-tools 直接编；armv8：用 cross（Docker）编 aarch64-musl
+          if [ "$ARCH_NAME" = "x86_64" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq musl-tools
+            TARGET=x86_64-unknown-linux-musl OUT=.nas-build/bin/hg-resolve CROSS=0 bash nas/build-sidecar.sh
+          else
+            if ! TARGET=aarch64-unknown-linux-musl OUT=.nas-build/bin/hg-resolve CROSS=1 bash nas/build-sidecar.sh; then
+              echo "::warning::armv8 侧车构建失败，本次 armv8 包不含 App 取流回落"
+            fi
+          fi
+
       - name: Download ffmpeg-core.wasm
         run: |
           ok=0
