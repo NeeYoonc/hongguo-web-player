@@ -1,0 +1,28 @@
+# 取流侧车（hg-resolve）的独立 workspace。
+#
+# 这里 vendor 了 hongguo-desktop 的 5 个 crate（hongguo-signer/api/common/video/bytevc2），
+# 它们实现了抖音/红果系官方 App 的请求签名（MetaSec v5：x-gorgon/x-argus/x-ladon/
+# x-helios/x-medusa）与官方取流接口。上游仓库：https://github.com/it00021hot/hongguo-desktop
+# 许可：PolyForm Noncommercial 1.0.0（见本目录 LICENSE / NOTICE.md）。
+# 只在本地/自用场景使用，不用于商业分发。
+#
+# 为什么 vendor：CI 不再需要 clone 外部仓库，构建可复现；协议变化时手动同步上游提交。
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/hg-resolve",
+    "crates/hongguo-api",
+    "crates/hongguo-bytevc2",
+    "crates/hongguo-common",
+    "crates/hongguo-signer",
+    "crates/hongguo-video",
+]
+
+[workspace.package]
+version = "0.6.6"
+edition = "2024"
+# 上游写的是其预期工具版本；这里取实际可用的 stable 下限
+rust-version = "1.85"
+license = "PolyForm-Noncommercial-1.0.0"
+authors = ["hongguo-desktop contributors"]

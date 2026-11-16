@@ -10,3 +10,6 @@ web/assets/ffmpeg/*.wasm
 .nas-build/
 dist/
 nas/assets/danmu/node_modules/
+
+# vendor workspace 构建产物（保留 Cargo.lock，target 不入库）
+nas/vendor/target/
