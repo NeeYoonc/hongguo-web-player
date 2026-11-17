@@ -1243,6 +1243,7 @@ function playDirect(stream, startTime, token) {
   video.oncanplay = function () { clog('direct canplay'); };
   video.onstalled = function () { clog('direct stalled'); };
   video.src = '/dec?' + streamQuery(stream) + '&v=' + token;
+  applyPictureEnhance();
   video.play().then(function () {
     clog('direct play() resolved');
   }).catch(function (e) {
@@ -1288,6 +1289,7 @@ async function startMse(stream, startTime, token) {
   });
   playerState.mse.load(startTime, duration);
   dmLoad(token);
+  applyPictureEnhance();
 }
 
 let playGeneration = 0;
@@ -4288,6 +4290,7 @@ function startDirectVideo(video, url) {
       fire();
     });
   })();
+  applyPictureEnhance();
   video.play().then(function () {
     clog('direct: play() resolved');
   }).catch(function (e) {

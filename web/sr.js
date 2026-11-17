@@ -96,7 +96,10 @@
     frames: 0,
     goodFrames: 0,
     blackChecks: 0,
-    strategy: 0,           // 0=video 直传, 1=2D 桥接, 2=createImageBitmap, 3=放弃
+    strategy: 0,           // 0=直传 1=2D桥接 2=ImageBitmap 3=captureStream+VideoFrame 4=放弃
+    reader: null,
+    processor: null,
+    stageLog: [],
     bitmapPending: false,
     bitmapOk: 0,
     bridge: null,
@@ -300,17 +303,72 @@
     escalateStrategy();
   }
 
+  function recordStage() {
+    const gl = state.gl;
+    const v = state.video;
+    state.stageLog.push({
+      stage: state.strategy,
+      glError: gl ? gl.getError() : -1,
+      vw: v ? v.videoWidth : 0,
+      vh: v ? v.videoHeight : 0,
+      ready: v ? v.readyState : 0,
+      cw: state.canvas ? state.canvas.width : 0,
+      ch: state.canvas ? state.canvas.height : 0,
+      src: v ? String(v.currentSrc || '').slice(0, 32) : '',
+      glMax: state.lastGlMax,
+      cpuMax: state.lastCpuMax,
+    });
+  }
+
+  function startFrameReader() {
+    const v = state.video;
+    if (!v || !global.MediaStreamTrackProcessor || typeof v.captureStream !== 'function') return false;
+    try {
+      const stream = v.captureStream();
+      const track = stream.getVideoTracks()[0];
+      if (!track) return false;
+      state.processor = new global.MediaStreamTrackProcessor({ track: track });
+      state.reader = state.processor.readable.getReader();
+      pumpFrames();
+      return true;
+    } catch (e) {
+      state.error = 'trackProcessor: ' + String((e && e.message) || e);
+      return false;
+    }
+  }
+
+  async function pumpFrames() {
+    while (state.running && state.reader) {
+      let res;
+      try { res = await state.reader.read(); } catch (e) { state.error = String((e && e.message) || e); break; }
+      if (!res || res.done) break;
+      const frame = res.value;
+      if (frame) {
+        try { draw(frame); } catch (e) { state.error = String((e && e.message) || e); }
+        try { frame.close(); } catch (e) { /* 忽略 */ }
+      }
+    }
+  }
+
   function escalateStrategy() {
-    if (state.strategy < 2) {
+    recordStage();
+    if (state.strategy < 3) {
       state.strategy += 1;
       state.error = '';
       state.blackChecks = 0;
       state.lastGlMax = -1;
-      return;
+      if (state.strategy === 3 && !startFrameReader()) {
+        recordStage();
+        state.strategy = 4;
+      } else {
+        return;
+      }
     }
     // 三条通道都失败 → 交给页面自动关闭
-    state.strategy = 3;
-    state.failReason = '当前显卡/浏览器无法把视频帧交给 WebGL（已尝试 直传 / 2D 桥接 / ImageBitmap）';
+    state.strategy = 4;
+    let detail = '';
+    try { detail = ' | ' + JSON.stringify(state.stageLog); } catch (e) { detail = ''; }
+    state.failReason = '当前显卡/浏览器无法把视频帧交给 WebGL（已尝试 直传 / 2D桥接 / ImageBitmap / VideoFrame）' + detail;
     const cb = state.onFail;
     disable();
     if (typeof cb === 'function') {
@@ -345,6 +403,9 @@
     const gl = state.gl;
     const v = state.video;
     if (!gl || !v || v.readyState < 2 || !v.videoWidth) return;
+
+    // 策略 3：captureStream + MediaStreamTrackProcessor（VideoFrame 直接上传）
+    if (state.strategy === 3) return;
 
     // 策略 2：走 createImageBitmap 异步取帧（另一条读帧通道，绕开 video 直传）
     if (state.strategy === 2) {
@@ -450,6 +511,9 @@
       state.onReady = (opts && opts.onReady) || null;
       state.readyFired = false;
       state.strategy = 0;
+      state.stageLog = [];
+      state.reader = null;
+      state.processor = null;
       state.bitmapPending = false;
       state.bitmapOk = 0;
       state.frames = 0;
@@ -474,6 +538,11 @@
   function disable() {
     state.running = false;
     stopLoops();
+    if (state.reader) {
+      try { state.reader.cancel(); } catch (e) { /* 忽略 */ }
+      state.reader = null;
+    }
+    state.processor = null;
     if (state.video) state.video.style.opacity = '';
     if (state.canvas) {
       state.canvas.style.display = 'none';
@@ -512,6 +581,7 @@
         cpuMax: state.lastCpuMax,
         error: state.error,
         failReason: state.failReason,
+        stageLog: state.stageLog,
         glError: state.gl ? state.gl.getError() : 0,
       };
     },
