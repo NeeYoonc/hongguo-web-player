@@ -3119,8 +3119,6 @@ function saveSettings() {
 function ensureSrCanvas(show) {
   const box = document.querySelector('.player-video');
   if (!box) return null;
-  if (window.__docPipCanvas) return window.__docPipCanvas; // 画布在 Document PiP 窗口里
-  if (window.__floatPipCanvas) return window.__floatPipCanvas; // 画布在页内悬浮窗里
   let canvas = document.getElementById('p-sr');
   if (!canvas) {
     canvas = document.createElement('canvas');
@@ -3269,142 +3267,6 @@ function bindPictureInPictureHooks() {
     if (active && !window.__srPipActive) { window.__srPipActive = true; enter(); }
     if (!active && window.__srPipActive) { window.__srPipActive = false; leave(); }
   }, 800);
-}
-
-// Document PiP：把超分画布搬进画中画窗口（原生 PiP 只能显示 <video>，带不了画布）
-async function toggleDocPip() {
-  const api = window.documentPictureInPicture;
-  const video = document.getElementById('video');
-  const canvas = document.getElementById('p-sr');
-  if (!api) {
-    // 非安全上下文（http + 局域网 IP）拿不到 Document PiP：退化为页内悬浮窗，超分照常
-    openFloatPip();
-    return;
-  }
-  if (api.window) { restoreFromDocPip(); return; }
-  if (!settingsState.sr) {
-    toast('请先在设置里开启 GPU 超分，再开画中画', 2600);
-    return;
-  }
-  if (!canvas || !window.HGSuperRes) {
-    toast('超分画布未就绪', 2000);
-    return;
-  }
-  const vw = video.videoWidth || 16;
-  const vh = video.videoHeight || 9;
-  const width = Math.min(560, Math.max(300, Math.round((window.innerWidth || 1280) * 0.28)));
-  const height = Math.max(180, Math.round(width * (vh / vw)));
-  let pipWin;
-  try {
-    pipWin = await api.requestWindow({ width: width, height: height });
-  } catch (e) {
-    toast('画中画打开失败：' + ((e && e.message) || e), 2600);
-    return;
-  }
-  pipWin.document.body.style.cssText = 'margin:0;background:#000;overflow:hidden';
-  canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;display:block;background:#000';
-  pipWin.document.body.appendChild(canvas);
-  window.__docPipWin = pipWin;
-  window.__docPipCanvas = canvas;
-
-  const fit = function () {
-    if (!window.HGSuperRes || !window.HGSuperRes.setSurface) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    window.HGSuperRes.setSurface(pipWin.innerWidth * dpr, pipWin.innerHeight * dpr);
-  };
-  fit();
-  pipWin.addEventListener('resize', fit);
-  pipWin.addEventListener('pagehide', function () { restoreFromDocPip(true); });
-
-  // 页内不再重复显示画面
-  const box = document.querySelector('.player-video');
-  if (box) box.classList.add('pip-active');
-  clog('docpip 开启 ' + width + 'x' + height);
-  toast('画中画已开启（超分生效）', 2200);
-}
-
-// 页内悬浮窗：Document PiP 不可用（http 非安全上下文）时的替代，超分照常
-function openFloatPip() {
-  if (window.__floatPipWrap) { closeFloatPip(); return; }
-  const box = document.querySelector('.player-video');
-  let canvas = window.__docPipCanvas || document.getElementById('p-sr');
-  if (!canvas || !window.HGSuperRes) { toast('请先在设置里开启 GPU 超分', 2400); return; }
-
-  const wrap = document.createElement('div');
-  wrap.id = 'p-floatpip';
-  wrap.innerHTML = '<div class="fp-bar"><span>画中画 · 超分</span><button class="fp-close" type="button">✕</button></div><div class="fp-body"></div>';
-  document.body.appendChild(wrap);
-  const body = wrap.querySelector('.fp-body');
-  body.appendChild(canvas);
-  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;background:#000';
-  window.__floatPipWrap = wrap;
-  window.__floatPipCanvas = canvas;
-
-  const fit = function () {
-    if (!window.HGSuperRes || !window.HGSuperRes.setSurface) return;
-    const r = body.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (r.width > 0 && r.height > 0) window.HGSuperRes.setSurface(r.width * dpr, r.height * dpr);
-  };
-  fit();
-  window.addEventListener('resize', fit);
-
-  // 拖动
-  const bar = wrap.querySelector('.fp-bar');
-  let drag = null;
-  bar.addEventListener('pointerdown', function (e) {
-    if (e.target.closest('.fp-close')) return;
-    drag = { x: e.clientX, y: e.clientY, left: wrap.offsetLeft, top: wrap.offsetTop };
-    bar.setPointerCapture(e.pointerId);
-  });
-  bar.addEventListener('pointermove', function (e) {
-    if (!drag) return;
-    const left = Math.max(8, Math.min(window.innerWidth - wrap.offsetWidth - 8, drag.left + e.clientX - drag.x));
-    const top = Math.max(8, Math.min(window.innerHeight - wrap.offsetHeight - 8, drag.top + e.clientY - drag.y));
-    wrap.style.left = left + 'px';
-    wrap.style.top = top + 'px';
-    wrap.style.right = 'auto';
-    wrap.style.bottom = 'auto';
-  });
-  bar.addEventListener('pointerup', function () { drag = null; });
-
-  wrap.querySelector('.fp-close').addEventListener('click', closeFloatPip);
-  if (box) box.classList.add('pip-active');
-  clog('floatpip 开启');
-  toast('已打开画中画悬浮窗（超分生效）', 2200);
-}
-
-function closeFloatPip() {
-  const wrap = window.__floatPipWrap;
-  const canvas = window.__floatPipCanvas;
-  window.__floatPipWrap = null;
-  window.__floatPipCanvas = null;
-  if (canvas) {
-    canvas.style.cssText = 'position:absolute;display:block';
-    const box = document.querySelector('.player-video');
-    (box || document.body).appendChild(canvas);
-  }
-  if (wrap) wrap.remove();
-  const box = document.querySelector('.player-video');
-  if (box) box.classList.remove('pip-active');
-  applyPictureEnhance();
-  clog('floatpip 关闭');
-}
-
-function restoreFromDocPip(fromEvent) {
-  const pipWin = window.__docPipWin;
-  const canvas = document.getElementById('p-sr');
-  const box = document.querySelector('.player-video');
-  window.__docPipWin = null;
-  window.__docPipCanvas = null;
-  if (canvas && pipWin && canvas.ownerDocument !== document) {
-    canvas.style.cssText = 'position:absolute;display:block';
-    (box || document.body).appendChild(canvas);
-  }
-  if (box) box.classList.remove('pip-active');
-  if (pipWin && !fromEvent) { try { pipWin.close(); } catch (e) { /* 忽略 */ } }
-  applyPictureEnhance();
-  clog('docpip 关闭');
 }
 
 function bindViewEvents() {
@@ -3971,7 +3833,6 @@ function bindEvents() {
   $('p-prev').addEventListener('click', prevEpisode);
   $('p-next').addEventListener('click', nextEpisode);
   $('p-fallback').addEventListener('click', fallback);
-  if ($('p-pip')) $('p-pip').addEventListener('click', function () { toggleDocPip(); });
   $('p-dm').addEventListener('click', function () {
     const panel = $('dm-panel');
     panel.hidden = !panel.hidden;
