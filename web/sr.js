@@ -1,13 +1,17 @@
 // GPU 实时超分（WebGL2）：Catmull-Rom 重建放大 + CAS 对比度自适应锐化。
 //
-// 全部在 GPU 上完成（两趟 shader：重建 → 锐化），不走 CPU 滤镜，
-// 输出到显示器原生分辨率（HiDPI 按 devicePixelRatio 提升，最多 2x）。
+// 设计要点（v2，修「打开就黑屏」）：
+//   1. 不立刻隐藏视频：先保留 <video> 可见，等到真正把视频帧画到画布、并且
+//      采样确认不是黑屏后，才隐藏视频（避免取帧失败时用户只看到黑画布）。
+//   2. 自检 + 自愈：每 15 帧做一次健康检查（CPU 2D 参考亮度 vs WebGL 输出亮度）。
+//      - 直接上传 <video> 拿到黑帧 → 自动切「2D 桥接」模式（先 drawImage 到 2D canvas
+//        再上传纹理，绕开部分显卡/ANGLE 硬件解码视频直传纹理的兼容问题）
+//      - 桥接仍黑 → 回调 onFail，由页面自动关闭超分并提示（绝不黑屏）
+//   3. 暂停/拖动/元数据就绪时都会补画一帧，不会出现「暂停后画布空」。
 //
 // 用法（app.js 调用）：
-//   HGSuperRes.enable(videoEl, canvasEl, { sharp: 0.7 })  -> true/false
-//   HGSuperRes.disable()
-//   HGSuperRes.setSharp(0.7)
-//   HGSuperRes.status()  -> { mode, width, height, frames, error }
+//   HGSuperRes.enable(videoEl, canvasEl, { sharp: 0.7, onFail(reason) })  -> true/false
+//   HGSuperRes.disable() / setSharp(0.7) / layout() / status()
 (function (global) {
   'use strict';
 
@@ -19,7 +23,6 @@
     gl_Position = vec4(aPos, 0.0, 1.0);
   }`;
 
-  // 第 1 趟：Catmull-Rom（4x4 双三次）从源分辨率重建到输出分辨率
   const FS_UP = `#version 300 es
   precision highp float;
   in vec2 vUv;
@@ -54,7 +57,6 @@
     fragColor = acc / max(sum, 1e-4);
   }`;
 
-  // 第 2 趟：CAS 对比度自适应锐化（暗部/高对比处自动收敛，避免噪点放大）
   const FS_CAS = `#version 300 es
   precision highp float;
   in vec2 vUv;
@@ -64,7 +66,6 @@
   uniform float uSharp;
 
   void main() {
-    // 第 1 趟写进 FBO 后纹理是自下而上的，这里翻回来
     vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
     vec2 texel = 1.0 / uSrc;
     vec3 c = texture(uTex, uv).rgb;
@@ -93,9 +94,19 @@
     fbo: null,
     sharp: 0.7,
     frames: 0,
+    goodFrames: 0,
+    blackChecks: 0,
+    use2D: false,
+    bridge: null,
+    bridgeCtx: null,
     error: '',
+    failReason: '',
+    onFail: null,
+    visible: false,
     lastVideoW: 0,
     lastVideoH: 0,
+    lastGlMax: -1,
+    lastCpuMax: -1,
     rvfc: 0,
     raf: 0,
     running: false,
@@ -191,7 +202,6 @@
     canvas.style.left = Math.round((box.width - cw) / 2) + 'px';
     canvas.style.top = Math.round((box.height - ch) / 2) + 'px';
 
-    // 输出到显示器原生分辨率（Retina/4K 屏最多 2x 采样）
     const dpr = Math.min(global.devicePixelRatio || 1, 2);
     const outW = Math.max(1, Math.round(cw * dpr));
     const outH = Math.max(1, Math.round(ch * dpr));
@@ -209,6 +219,106 @@
     state.lastVideoH = vh;
   }
 
+  // 2D 参考亮度：CPU 侧把视频画进 32x32 canvas，用于判断「视频本身是不是黑」
+  const probe = { canvas: null, ctx: null };
+  function cpuMax(video) {
+    try {
+      if (!probe.canvas) {
+        probe.canvas = document.createElement('canvas');
+        probe.canvas.width = 32;
+        probe.canvas.height = 32;
+        probe.ctx = probe.canvas.getContext('2d', { willReadFrequently: true });
+      }
+      probe.ctx.drawImage(video, 0, 0, 32, 32);
+      const data = probe.ctx.getImageData(0, 0, 32, 32).data;
+      let max = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] > max) max = data[i];
+        if (data[i + 1] > max) max = data[i + 1];
+        if (data[i + 2] > max) max = data[i + 2];
+      }
+      return max;
+    } catch (e) {
+      return -1;
+    }
+  }
+
+  function glMax() {
+    const gl = state.gl;
+    if (!gl) return 0;
+    const w = state.canvas.width;
+    const h = state.canvas.height;
+    const px = new Uint8Array(4);
+    let max = 0;
+    const xs = [Math.max(0, (w >> 1) - 1), Math.max(0, (w >> 2) - 1), Math.max(0, (w * 3 >> 2) - 1)];
+    const ys = [Math.max(0, (h >> 1) - 1), Math.max(0, (h >> 2) - 1), Math.max(0, (h * 3 >> 2) - 1)];
+    for (const x of xs) {
+      for (const y of ys) {
+        gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        max = Math.max(max, px[0], px[1], px[2]);
+      }
+    }
+    return max;
+  }
+
+  function showCanvas(show) {
+    state.visible = show;
+    if (state.video) state.video.style.opacity = show ? '0' : '';
+    if (state.canvas) state.canvas.style.opacity = show ? '1' : '1';
+  }
+
+  function healthCheck() {
+    const v = state.video;
+    if (!v || !v.videoWidth) return;
+    const cpu = cpuMax(v);
+    const glv = glMax();
+    state.lastCpuMax = cpu;
+    state.lastGlMax = glv;
+    if (cpu <= 8) return; // 视频本身是黑场/加载中，不判定
+    if (glv > 4) {
+      state.blackChecks = 0;
+      state.goodFrames += 1;
+      if (!state.visible) showCanvas(true);
+      return;
+    }
+    // WebGL 输出全黑，但视频有内容 → 取帧失败
+    state.blackChecks += 1;
+    if (state.blackChecks < 2) return;
+    state.blackChecks = 0;
+    if (!state.use2D) {
+      state.use2D = true;
+      state.error = '';
+      if (state.canvas) state.canvas.style.display = 'block';
+      return;
+    }
+    // 桥接也失败 → 交给页面自动关闭
+    state.failReason = '当前显卡/浏览器无法把视频帧交给 WebGL（已尝试 2D 桥接）';
+    const cb = state.onFail;
+    disable();
+    if (typeof cb === 'function') {
+      try { cb(state.failReason); } catch (e) { /* 忽略 */ }
+    }
+  }
+
+  function uploadFrame(v) {
+    const gl = state.gl;
+    gl.bindTexture(gl.TEXTURE_2D, state.texSrc);
+    if (state.use2D) {
+      if (!state.bridge) {
+        state.bridge = document.createElement('canvas');
+        state.bridgeCtx = state.bridge.getContext('2d', { willReadFrequently: false });
+      }
+      if (state.bridge.width !== v.videoWidth || state.bridge.height !== v.videoHeight) {
+        state.bridge.width = v.videoWidth;
+        state.bridge.height = v.videoHeight;
+      }
+      state.bridgeCtx.drawImage(v, 0, 0, state.bridge.width, state.bridge.height);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, state.bridge);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+    }
+  }
+
   function renderFrame() {
     const gl = state.gl;
     const v = state.video;
@@ -220,10 +330,8 @@
     if (!outW || !outH) return;
 
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.bindTexture(gl.TEXTURE_2D, state.texSrc);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+    uploadFrame(v);
 
-    // 第 1 趟：重建放大 → FBO
     gl.bindFramebuffer(gl.FRAMEBUFFER, state.fbo);
     gl.viewport(0, 0, outW, outH);
     gl.useProgram(state.progUp);
@@ -234,7 +342,6 @@
     gl.bindVertexArray(state.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-    // 第 2 趟：CAS 锐化 → 屏幕
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, outW, outH);
     gl.useProgram(state.progCas);
@@ -246,6 +353,9 @@
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     state.frames += 1;
+    if (state.frames % 15 === 0) {
+      try { healthCheck(); } catch (e) { /* 忽略 */ }
+    }
   }
 
   function schedule() {
@@ -253,13 +363,13 @@
     const v = state.video;
     if (v && typeof v.requestVideoFrameCallback === 'function') {
       state.rvfc = v.requestVideoFrameCallback(function () {
-        try { renderFrame(); } catch (e) { state.error = String(e && e.message || e); }
+        try { renderFrame(); } catch (e) { state.error = String((e && e.message) || e); }
         schedule();
       });
       return;
     }
     state.raf = global.requestAnimationFrame(function () {
-      try { renderFrame(); } catch (e) { state.error = String(e && e.message || e); }
+      try { renderFrame(); } catch (e) { state.error = String((e && e.message) || e); }
       schedule();
     });
   }
@@ -279,17 +389,23 @@
     try {
       disable();
       initGL(video, canvas);
-      state.sharp = typeof opts.sharp === 'number' ? opts.sharp : 0.7;
+      state.sharp = opts && typeof opts.sharp === 'number' ? opts.sharp : 0.7;
+      state.onFail = (opts && opts.onFail) || null;
+      state.use2D = false;
+      state.frames = 0;
+      state.goodFrames = 0;
+      state.blackChecks = 0;
+      state.error = '';
+      state.failReason = '';
       canvas.style.display = 'block';
-      video.style.opacity = '0';
+      showCanvas(false); // 先别隐藏视频，等确认能画出来
       layout();
       state.running = true;
-      state.error = '';
       renderFrame();
       schedule();
       return true;
     } catch (e) {
-      state.error = String(e && e.message || e);
+      state.error = String((e && e.message) || e);
       try { disable(); } catch (e2) { /* 忽略 */ }
       return false;
     }
@@ -299,6 +415,11 @@
     state.running = false;
     stopLoops();
     if (state.video) state.video.style.opacity = '';
+    if (state.canvas) {
+      state.canvas.style.display = 'none';
+      state.canvas.style.opacity = '1';
+    }
+    state.visible = false;
     state.video = null;
     state.canvas = null;
     state.gl = null;
@@ -308,7 +429,8 @@
     state.texSrc = null;
     state.texFbo = null;
     state.fbo = null;
-    state.frames = 0;
+    state.bridge = null;
+    state.bridgeCtx = null;
   }
 
   global.HGSuperRes = {
@@ -318,11 +440,16 @@
     setSharp: function (value) { state.sharp = Number(value) || 0; },
     status: function () {
       return {
-        mode: state.gl ? 'webgl2' : 'off',
+        mode: state.gl ? (state.use2D ? 'webgl2+2d' : 'webgl2') : 'off',
         width: state.canvas ? state.canvas.width : 0,
         height: state.canvas ? state.canvas.height : 0,
         frames: state.frames,
+        goodFrames: state.goodFrames,
+        visible: state.visible,
+        glMax: state.lastGlMax,
+        cpuMax: state.lastCpuMax,
         error: state.error,
+        failReason: state.failReason,
         glError: state.gl ? state.gl.getError() : 0,
       };
     },

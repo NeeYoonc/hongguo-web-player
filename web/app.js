@@ -3148,7 +3148,18 @@ function applyPictureEnhance() {
   if (!settingsState.sr) { disablePictureEnhance(); return; }
   const canvas = ensureSrCanvas(true);
   if (!canvas || !window.HGSuperRes) return;
-  const ok = window.HGSuperRes.enable(v, canvas, { sharp: srSharpness() });
+  const ok = window.HGSuperRes.enable(v, canvas, {
+    sharp: srSharpness(),
+    onFail: function (reason) {
+      // 取不到视频帧（显卡/ANGLE 兼容问题）：自动关闭并记住，避免每一集都黑屏
+      settingsState.sr = false;
+      saveSettings();
+      const box = document.getElementById('st-sr');
+      if (box) box.checked = false;
+      disablePictureEnhance();
+      toast('GPU 超分已自动关闭：' + reason);
+    },
+  });
   if (!ok) {
     disablePictureEnhance();
     if (!window.__srWarned) {
