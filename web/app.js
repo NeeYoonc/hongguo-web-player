@@ -3148,8 +3148,12 @@ function applyPictureEnhance() {
   if (!settingsState.sr) { disablePictureEnhance(); return; }
   const canvas = ensureSrCanvas(true);
   if (!canvas || !window.HGSuperRes) return;
+  clog('sr 开启 sharp=' + srSharpness());
   const ok = window.HGSuperRes.enable(v, canvas, {
     sharp: srSharpness(),
+    onReady: function () {
+      try { clog('sr 生效 ' + JSON.stringify(window.HGSuperRes.status())); } catch (e) { /* 忽略 */ }
+    },
     onFail: function (reason) {
       // 取不到视频帧（显卡/ANGLE 兼容问题）：自动关闭并记住，避免每一集都黑屏
       settingsState.sr = false;

@@ -104,6 +104,8 @@
     error: '',
     failReason: '',
     onFail: null,
+    onReady: null,
+    readyFired: false,
     visible: false,
     lastVideoW: 0,
     lastVideoH: 0,
@@ -280,7 +282,15 @@
     if (glv > 4) {
       state.blackChecks = 0;
       state.goodFrames += 1;
-      if (!state.visible) showCanvas(true);
+      if (!state.visible) {
+        showCanvas(true);
+        if (!state.readyFired) {
+          state.readyFired = true;
+          if (typeof state.onReady === 'function') {
+            try { state.onReady(); } catch (e) { /* 忽略 */ }
+          }
+        }
+      }
       return;
     }
     // WebGL 输出全黑，但视频有内容 → 取帧失败
@@ -437,6 +447,8 @@
       initGL(video, canvas);
       state.sharp = opts && typeof opts.sharp === 'number' ? opts.sharp : 0.7;
       state.onFail = (opts && opts.onFail) || null;
+      state.onReady = (opts && opts.onReady) || null;
+      state.readyFired = false;
       state.strategy = 0;
       state.bitmapPending = false;
       state.bitmapOk = 0;
