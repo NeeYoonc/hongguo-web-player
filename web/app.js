@@ -1008,6 +1008,8 @@ function mseMime() {
 }
 
 function hevcSupported() {
+  // 超分兜底：强制 H.264 转码路径（HEVC 硬件帧在部分显卡上无法被 WebGL 读取）
+  if (window.__srForceMse) return false;
   try {
     const probe = document.createElement('video');
     const type = probe.canPlayType(HEVC_MIME);
@@ -3147,7 +3149,12 @@ function applyPictureEnhance() {
   const v = document.getElementById('video');
   if (!v) return;
   v.style.filter = ''; // 旧的 SVG 卷积滤镜走 CPU，已废弃
-  if (!settingsState.sr) { disablePictureEnhance(); return; }
+  if (!settingsState.sr) {
+    window.__srForceMse = false;
+    window.__srMseTried = false;
+    disablePictureEnhance();
+    return;
+  }
   const canvas = ensureSrCanvas(true);
   if (!canvas || !window.HGSuperRes) return;
   clog('sr 开启 sharp=' + srSharpness());
@@ -3157,16 +3164,27 @@ function applyPictureEnhance() {
       try { clog('sr 生效 ' + JSON.stringify(window.HGSuperRes.status())); } catch (e) { /* 忽略 */ }
     },
     onFail: function (reason) {
-      // 取不到视频帧（显卡/ANGLE 兼容问题）：自动关闭并记住，避免每一集都黑屏
+      try {
+        const st = window.HGSuperRes ? window.HGSuperRes.status() : {};
+        clog('sr 失败: ' + reason + ' ' + JSON.stringify(st));
+      } catch (e) { /* 忽略 */ }
+      // 第一次失败：自动切 H.264 转码路径重试（HEVC 硬件帧无法读回时，H.264 通常可以）
+      if (!window.__srMseTried && state.chapters && state.chapters[state.index]) {
+        window.__srMseTried = true;
+        window.__srForceMse = true;
+        disablePictureEnhance();
+        const at = ($('video') && $('video').currentTime) || 0;
+        clog('sr 回退：切 H.264 转码重试，at=' + at.toFixed(1));
+        toast('HEVC 帧无法读取，已切 H.264 转码重试超分…', 2600);
+        playEpisode(state.index, { startTime: at, quality: state.quality, keepTime: true });
+        return;
+      }
+      // 第二次仍失败：彻底关闭
       settingsState.sr = false;
       saveSettings();
       const box = document.getElementById('st-sr');
       if (box) box.checked = false;
       disablePictureEnhance();
-      try {
-        const st = window.HGSuperRes ? window.HGSuperRes.status() : {};
-        clog('sr 失败: ' + reason + ' ' + JSON.stringify(st));
-      } catch (e) { /* 忽略 */ }
       toast('GPU 超分已自动关闭：' + reason);
     },
   });
