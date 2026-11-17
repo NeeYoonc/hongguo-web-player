@@ -189,7 +189,21 @@
     state.gl = gl;
     state.video = video;
     state.canvas = canvas;
+    attachFbo();
     return gl;
+  }
+
+  // 把 texFbo 重新挂到 FBO 上（尺寸变化或重新 enable 时都必须调用）
+  function attachFbo() {
+    const gl = state.gl;
+    if (!gl || !state.texFbo || !state.fbo || !state.canvas) return;
+    const w = Math.max(1, state.canvas.width);
+    const h = Math.max(1, state.canvas.height);
+    gl.bindTexture(gl.TEXTURE_2D, state.texFbo);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, state.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state.texFbo, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   function layout() {
@@ -215,12 +229,7 @@
     if (canvas.width !== outW || canvas.height !== outH) {
       canvas.width = outW;
       canvas.height = outH;
-      const gl = state.gl;
-      gl.bindTexture(gl.TEXTURE_2D, state.texFbo);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, outW, outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, state.fbo);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state.texFbo, 0);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      attachFbo();
     }
     state.lastVideoW = vw;
     state.lastVideoH = vh;
@@ -503,6 +512,14 @@
 
   function enable(video, canvas, opts) {
     if (!video || !canvas) return false;
+    // 已在运行且对象没变：只更新锐度/回调，避免重复初始化把 FBO 弄坏
+    if (state.running && state.gl && state.video === video && state.canvas === canvas) {
+      state.sharp = opts && typeof opts.sharp === 'number' ? opts.sharp : state.sharp;
+      if (opts && opts.onFail) state.onFail = opts.onFail;
+      if (opts && opts.onReady) state.onReady = opts.onReady;
+      layout();
+      return true;
+    }
     try {
       disable();
       initGL(video, canvas);
