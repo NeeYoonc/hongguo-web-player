@@ -96,7 +96,9 @@
     frames: 0,
     goodFrames: 0,
     blackChecks: 0,
-    use2D: false,
+    strategy: 0,           // 0=video 直传, 1=2D 桥接, 2=createImageBitmap, 3=放弃
+    bitmapPending: false,
+    bitmapOk: 0,
     bridge: null,
     bridgeCtx: null,
     error: '',
@@ -285,14 +287,20 @@
     state.blackChecks += 1;
     if (state.blackChecks < 2) return;
     state.blackChecks = 0;
-    if (!state.use2D) {
-      state.use2D = true;
+    escalateStrategy();
+  }
+
+  function escalateStrategy() {
+    if (state.strategy < 2) {
+      state.strategy += 1;
       state.error = '';
-      if (state.canvas) state.canvas.style.display = 'block';
+      state.blackChecks = 0;
+      state.lastGlMax = -1;
       return;
     }
-    // 桥接也失败 → 交给页面自动关闭
-    state.failReason = '当前显卡/浏览器无法把视频帧交给 WebGL（已尝试 2D 桥接）';
+    // 三条通道都失败 → 交给页面自动关闭
+    state.strategy = 3;
+    state.failReason = '当前显卡/浏览器无法把视频帧交给 WebGL（已尝试 直传 / 2D 桥接 / ImageBitmap）';
     const cb = state.onFail;
     disable();
     if (typeof cb === 'function') {
@@ -300,10 +308,14 @@
     }
   }
 
-  function uploadFrame(v) {
+  function uploadFrame(v, source) {
     const gl = state.gl;
     gl.bindTexture(gl.TEXTURE_2D, state.texSrc);
-    if (state.use2D) {
+    if (source) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      return;
+    }
+    if (state.strategy === 1) {
       if (!state.bridge) {
         state.bridge = document.createElement('canvas');
         state.bridgeCtx = state.bridge.getContext('2d', { willReadFrequently: false });
@@ -324,6 +336,25 @@
     const v = state.video;
     if (!gl || !v || v.readyState < 2 || !v.videoWidth) return;
 
+    // 策略 2：走 createImageBitmap 异步取帧（另一条读帧通道，绕开 video 直传）
+    if (state.strategy === 2) {
+      if (state.bitmapPending) return;
+      state.bitmapPending = true;
+      if (typeof createImageBitmap !== 'function') { escalateStrategy(); state.bitmapPending = false; return; }
+      createImageBitmap(v).then(function (bmp) {
+        state.bitmapPending = false;
+        if (!state.running) { try { bmp.close(); } catch (e) { /* 忽略 */ } return; }
+        state.bitmapOk += 1;
+        try { draw(bmp); } catch (e) { state.error = String((e && e.message) || e); }
+        try { bmp.close(); } catch (e) { /* 忽略 */ }
+      }).catch(function (e) {
+        state.bitmapPending = false;
+        state.error = 'createImageBitmap: ' + String((e && e.message) || e);
+        escalateStrategy();
+      });
+      return;
+    }
+
     if (v.videoWidth !== state.lastVideoW || v.videoHeight !== state.lastVideoH) layout();
     const outW = state.canvas.width;
     const outH = state.canvas.height;
@@ -331,6 +362,21 @@
 
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     uploadFrame(v);
+    draw(null);
+  }
+
+  function draw(bitmapSource) {
+    const gl = state.gl;
+    const v = state.video;
+    if (!gl || !v) return;
+    if (bitmapSource) {
+      if (v.videoWidth !== state.lastVideoW || v.videoHeight !== state.lastVideoH) layout();
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      uploadFrame(v, bitmapSource);
+    }
+    const outW = state.canvas.width;
+    const outH = state.canvas.height;
+    if (!outW || !outH) return;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, state.fbo);
     gl.viewport(0, 0, outW, outH);
@@ -391,7 +437,9 @@
       initGL(video, canvas);
       state.sharp = opts && typeof opts.sharp === 'number' ? opts.sharp : 0.7;
       state.onFail = (opts && opts.onFail) || null;
-      state.use2D = false;
+      state.strategy = 0;
+      state.bitmapPending = false;
+      state.bitmapOk = 0;
       state.frames = 0;
       state.goodFrames = 0;
       state.blackChecks = 0;
@@ -440,7 +488,9 @@
     setSharp: function (value) { state.sharp = Number(value) || 0; },
     status: function () {
       return {
-        mode: state.gl ? (state.use2D ? 'webgl2+2d' : 'webgl2') : 'off',
+        mode: state.gl ? 'webgl2' : 'off',
+        strategy: state.strategy,
+        bitmapOk: state.bitmapOk,
         width: state.canvas ? state.canvas.width : 0,
         height: state.canvas ? state.canvas.height : 0,
         frames: state.frames,

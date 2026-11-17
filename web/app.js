@@ -3157,6 +3157,10 @@ function applyPictureEnhance() {
       const box = document.getElementById('st-sr');
       if (box) box.checked = false;
       disablePictureEnhance();
+      try {
+        const st = window.HGSuperRes ? window.HGSuperRes.status() : {};
+        clog('sr 失败: ' + reason + ' ' + JSON.stringify(st));
+      } catch (e) { /* 忽略 */ }
       toast('GPU 超分已自动关闭：' + reason);
     },
   });
