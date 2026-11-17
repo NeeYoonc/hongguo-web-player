@@ -3119,6 +3119,7 @@ function saveSettings() {
 function ensureSrCanvas(show) {
   const box = document.querySelector('.player-video');
   if (!box) return null;
+  if (window.__docPipCanvas) return window.__docPipCanvas; // 画布在画中画窗口里
   let canvas = document.getElementById('p-sr');
   if (!canvas) {
     canvas = document.createElement('canvas');
@@ -3267,6 +3268,73 @@ function bindPictureInPictureHooks() {
     if (active && !window.__srPipActive) { window.__srPipActive = true; enter(); }
     if (!active && window.__srPipActive) { window.__srPipActive = false; leave(); }
   }, 800);
+}
+
+// Document PiP：把超分画布搬进画中画窗口（原生 PiP 只能显示 <video>，带不了画布）
+async function toggleDocPip() {
+  const api = window.documentPictureInPicture;
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('p-sr');
+  if (!api) {
+    toast('当前浏览器不支持 Document PiP（需 Chrome 116+）', 2600);
+    return;
+  }
+  if (api.window) { restoreFromDocPip(); return; }
+  if (!settingsState.sr) {
+    toast('请先在设置里开启 GPU 超分，再开画中画', 2600);
+    return;
+  }
+  if (!canvas || !window.HGSuperRes) {
+    toast('超分画布未就绪', 2000);
+    return;
+  }
+  const vw = video.videoWidth || 16;
+  const vh = video.videoHeight || 9;
+  const width = Math.min(560, Math.max(300, Math.round((window.innerWidth || 1280) * 0.28)));
+  const height = Math.max(180, Math.round(width * (vh / vw)));
+  let pipWin;
+  try {
+    pipWin = await api.requestWindow({ width: width, height: height });
+  } catch (e) {
+    toast('画中画打开失败：' + ((e && e.message) || e), 2600);
+    return;
+  }
+  pipWin.document.body.style.cssText = 'margin:0;background:#000;overflow:hidden';
+  canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;display:block;background:#000';
+  pipWin.document.body.appendChild(canvas);
+  window.__docPipWin = pipWin;
+  window.__docPipCanvas = canvas;
+
+  const fit = function () {
+    if (!window.HGSuperRes || !window.HGSuperRes.setSurface) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    window.HGSuperRes.setSurface(pipWin.innerWidth * dpr, pipWin.innerHeight * dpr);
+  };
+  fit();
+  pipWin.addEventListener('resize', fit);
+  pipWin.addEventListener('pagehide', function () { restoreFromDocPip(true); });
+
+  // 页内不再重复显示画面
+  const box = document.querySelector('.player-video');
+  if (box) box.classList.add('pip-active');
+  clog('docpip 开启 ' + width + 'x' + height);
+  toast('画中画已开启（超分生效）', 2200);
+}
+
+function restoreFromDocPip(fromEvent) {
+  const pipWin = window.__docPipWin;
+  const canvas = document.getElementById('p-sr');
+  const box = document.querySelector('.player-video');
+  window.__docPipWin = null;
+  window.__docPipCanvas = null;
+  if (canvas && pipWin && canvas.ownerDocument !== document) {
+    canvas.style.cssText = 'position:absolute;display:block';
+    (box || document.body).appendChild(canvas);
+  }
+  if (box) box.classList.remove('pip-active');
+  if (pipWin && !fromEvent) { try { pipWin.close(); } catch (e) { /* 忽略 */ } }
+  applyPictureEnhance();
+  clog('docpip 关闭');
 }
 
 function bindViewEvents() {
@@ -3833,6 +3901,7 @@ function bindEvents() {
   $('p-prev').addEventListener('click', prevEpisode);
   $('p-next').addEventListener('click', nextEpisode);
   $('p-fallback').addEventListener('click', fallback);
+  if ($('p-pip')) $('p-pip').addEventListener('click', function () { toggleDocPip(); });
   $('p-dm').addEventListener('click', function () {
     const panel = $('dm-panel');
     panel.hidden = !panel.hidden;

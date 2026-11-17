@@ -210,6 +210,8 @@
     const v = state.video;
     const canvas = state.canvas;
     if (!v || !canvas) return;
+    // 画布被搬进 Document PiP 窗口时，尺寸由窗口决定，不按页面里的视频矩形算
+    if (canvas.ownerDocument && canvas.ownerDocument !== document) return;
     const box = v.getBoundingClientRect();
     const vw = v.videoWidth || 16;
     const vh = v.videoHeight || 9;
@@ -583,6 +585,16 @@
     enable: enable,
     disable: disable,
     layout: layout,
+    // 画中画窗口里画布尺寸由窗口决定（不走 layout 的视频矩形计算）
+    setSurface: function (width, height) {
+      if (!state.gl || !state.canvas) return;
+      const cw = Math.max(1, Math.round(width));
+      const ch = Math.max(1, Math.round(height));
+      if (state.canvas.width === cw && state.canvas.height === ch) return;
+      state.canvas.width = cw;
+      state.canvas.height = ch;
+      attachFbo();
+    },
     setSharp: function (value) { state.sharp = Number(value) || 0; },
     status: function () {
       return {
