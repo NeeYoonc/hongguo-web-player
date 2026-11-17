@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,8 +133,14 @@ func handleComments(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := fetchWebComments(sid, vid)
 	if err != nil {
-		writeJSONC(w, 502, map[string]any{"error": err.Error()})
-		return
+		// 网页评论通道 2026-11 起也被收紧：改走官方 App 评论接口（侧车）
+		if appComments, aerr := fetchAppComments(r.Context(), sid, vid); aerr == nil {
+			c = appComments
+		} else {
+			log.Printf("comments 失败 web=%v app=%v", err, aerr)
+			writeJSONC(w, 502, map[string]any{"error": err.Error()})
+			return
+		}
 	}
 	writeJSONC(w, 200, c)
 }

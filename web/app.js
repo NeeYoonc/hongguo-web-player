@@ -3236,6 +3236,27 @@ function bindSettings() {
   applyPictureEnhance();
 }
 
+function bindPictureInPictureHooks() {
+  const v = document.getElementById('video');
+  if (!v || v.__srPipBound) return;
+  v.__srPipBound = true;
+  // 浏览器画中画窗口渲染的是原始 <video>，超分画布不会跟着走；
+  // 进入画中画时暂停超分，退出后恢复，避免「两个画面、一个锐一个不锐」。
+  v.addEventListener('enterpictureinpicture', function () {
+    if (settingsState.sr) {
+      window.__srPipPaused = true;
+      disablePictureEnhance();
+      toast('画中画模式已暂停 GPU 超分', 2200);
+    }
+  });
+  v.addEventListener('leavepictureinpicture', function () {
+    if (window.__srPipPaused) {
+      window.__srPipPaused = false;
+      applyPictureEnhance();
+    }
+  });
+}
+
 function bindViewEvents() {
   const fullview = $('p-fullview');
   if (fullview) fullview.addEventListener('click', toggleFullview);
@@ -3812,6 +3833,7 @@ function bindEvents() {
   if (document.hidden) pausePlaybackForNav('hidden');
 });
 
+bindPictureInPictureHooks();
 dmApplyStyle();
     if (dm.on) dmLoad(playerState.token);
     else { dmItems = []; dmIndex = 0; dmClear(); }

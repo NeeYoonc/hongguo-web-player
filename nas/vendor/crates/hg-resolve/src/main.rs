@@ -95,6 +95,9 @@ async fn main() {
             args.drain(pos..=pos + 1);
         }
     }
+    let comments_mode = args.iter().any(|a| a == "--comments");
+    args.retain(|a| a != "--comments");
+
     let mut forced_ct: i64 = 0;
     if let Some(pos) = args.iter().position(|a| a == "--ct") {
         if pos + 1 < args.len() {
@@ -130,6 +133,38 @@ async fn main() {
             std::process::exit(3);
         }
     };
+
+    if comments_mode {
+        match hongguo_api::danmaku::fetch_comments_page(&vid, &series_id, "", &env).await {
+            Ok(page) => {
+                let items: Vec<serde_json::Value> = page
+                    .items
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "user": c.user_name,
+                            "avatar": c.avatar,
+                            "text": c.text,
+                            "time": c.create_time,
+                            "digg": c.digg_count,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": true,
+                        "data": { "total": page.total, "items": items }
+                    })
+                );
+            }
+            Err(e) => {
+                println!("{}", serde_json::json!({"ok": false, "error": e.to_string()}));
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
 
     let mut content_type = forced_ct;
     if forced_ct > 0 {

@@ -334,3 +334,56 @@ func truncate(text string, n int) string {
 	}
 	return text[:n]
 }
+
+// fetchAppComments 走侧车 --comments（官方 App 评论接口），网页通道失效时兜底。
+func fetchAppComments(ctx context.Context, sid, vid string) (*webComments, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, sidecarBin(), sid, vid, "--comments", "--device", sidecarDeviceFile())
+	cmd.Env = append(os.Environ(), "NO_COLOR=1")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var last string
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "{") {
+			last = lines[i]
+			break
+		}
+	}
+	if last == "" {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" && err != nil {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("评论侧车无输出: %s", truncate(msg, 300))
+	}
+	var res struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+		Data  struct {
+			Total int `json:"total"`
+			Items []struct {
+				User   string `json:"user"`
+				Avatar string `json:"avatar"`
+				Text   string `json:"text"`
+				Time   int64  `json:"time"`
+				Digg   int64  `json:"digg"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(last), &res); err != nil {
+		return nil, fmt.Errorf("评论侧车返回异常: %v", err)
+	}
+	if !res.OK {
+		return nil, fmt.Errorf("App 评论失败：%s", truncate(res.Error, 200))
+	}
+	items := make([]webComment, 0, len(res.Data.Items))
+	for _, it := range res.Data.Items {
+		items = append(items, webComment{
+			User: it.User, Avatar: it.Avatar, Text: it.Text, Time: it.Time, Digg: it.Digg,
+		})
+	}
+	return &webComments{Total: res.Data.Total, Items: items}, nil
+}
