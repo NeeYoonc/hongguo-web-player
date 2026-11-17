@@ -1231,3 +1231,41 @@ button.meta-tag:hover { background: rgba(255, 45, 85, .22); color: #ff8ba0; text
   font-size: 14px;
   pointer-events: none;
 }
+
+/* 页内画中画悬浮窗（Document PiP 不可用时） */
+#p-floatpip {
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  width: min(420px, 44vw);
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .6);
+  overflow: hidden;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+}
+#p-floatpip .fp-bar {
+  height: 28px;
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  background: #1a1d21;
+  color: #b9c0c8;
+  font-size: 12px;
+  cursor: move;
+  user-select: none;
+}
+#p-floatpip .fp-body { position: relative; flex: 1; min-height: 0; }
+#p-floatpip .fp-close {
+  background: none;
+  border: 0;
+  color: #b9c0c8;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+}

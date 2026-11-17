@@ -3119,7 +3119,8 @@ function saveSettings() {
 function ensureSrCanvas(show) {
   const box = document.querySelector('.player-video');
   if (!box) return null;
-  if (window.__docPipCanvas) return window.__docPipCanvas; // 画布在画中画窗口里
+  if (window.__docPipCanvas) return window.__docPipCanvas; // 画布在 Document PiP 窗口里
+  if (window.__floatPipCanvas) return window.__floatPipCanvas; // 画布在页内悬浮窗里
   let canvas = document.getElementById('p-sr');
   if (!canvas) {
     canvas = document.createElement('canvas');
@@ -3276,7 +3277,8 @@ async function toggleDocPip() {
   const video = document.getElementById('video');
   const canvas = document.getElementById('p-sr');
   if (!api) {
-    toast('当前浏览器不支持 Document PiP（需 Chrome 116+）', 2600);
+    // 非安全上下文（http + 局域网 IP）拿不到 Document PiP：退化为页内悬浮窗，超分照常
+    openFloatPip();
     return;
   }
   if (api.window) { restoreFromDocPip(); return; }
@@ -3319,6 +3321,74 @@ async function toggleDocPip() {
   if (box) box.classList.add('pip-active');
   clog('docpip 开启 ' + width + 'x' + height);
   toast('画中画已开启（超分生效）', 2200);
+}
+
+// 页内悬浮窗：Document PiP 不可用（http 非安全上下文）时的替代，超分照常
+function openFloatPip() {
+  if (window.__floatPipWrap) { closeFloatPip(); return; }
+  const box = document.querySelector('.player-video');
+  let canvas = window.__docPipCanvas || document.getElementById('p-sr');
+  if (!canvas || !window.HGSuperRes) { toast('请先在设置里开启 GPU 超分', 2400); return; }
+
+  const wrap = document.createElement('div');
+  wrap.id = 'p-floatpip';
+  wrap.innerHTML = '<div class="fp-bar"><span>画中画 · 超分</span><button class="fp-close" type="button">✕</button></div><div class="fp-body"></div>';
+  document.body.appendChild(wrap);
+  const body = wrap.querySelector('.fp-body');
+  body.appendChild(canvas);
+  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;background:#000';
+  window.__floatPipWrap = wrap;
+  window.__floatPipCanvas = canvas;
+
+  const fit = function () {
+    if (!window.HGSuperRes || !window.HGSuperRes.setSurface) return;
+    const r = body.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (r.width > 0 && r.height > 0) window.HGSuperRes.setSurface(r.width * dpr, r.height * dpr);
+  };
+  fit();
+  window.addEventListener('resize', fit);
+
+  // 拖动
+  const bar = wrap.querySelector('.fp-bar');
+  let drag = null;
+  bar.addEventListener('pointerdown', function (e) {
+    if (e.target.closest('.fp-close')) return;
+    drag = { x: e.clientX, y: e.clientY, left: wrap.offsetLeft, top: wrap.offsetTop };
+    bar.setPointerCapture(e.pointerId);
+  });
+  bar.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    const left = Math.max(8, Math.min(window.innerWidth - wrap.offsetWidth - 8, drag.left + e.clientX - drag.x));
+    const top = Math.max(8, Math.min(window.innerHeight - wrap.offsetHeight - 8, drag.top + e.clientY - drag.y));
+    wrap.style.left = left + 'px';
+    wrap.style.top = top + 'px';
+    wrap.style.right = 'auto';
+    wrap.style.bottom = 'auto';
+  });
+  bar.addEventListener('pointerup', function () { drag = null; });
+
+  wrap.querySelector('.fp-close').addEventListener('click', closeFloatPip);
+  if (box) box.classList.add('pip-active');
+  clog('floatpip 开启');
+  toast('已打开画中画悬浮窗（超分生效）', 2200);
+}
+
+function closeFloatPip() {
+  const wrap = window.__floatPipWrap;
+  const canvas = window.__floatPipCanvas;
+  window.__floatPipWrap = null;
+  window.__floatPipCanvas = null;
+  if (canvas) {
+    canvas.style.cssText = 'position:absolute;display:block';
+    const box = document.querySelector('.player-video');
+    (box || document.body).appendChild(canvas);
+  }
+  if (wrap) wrap.remove();
+  const box = document.querySelector('.player-video');
+  if (box) box.classList.remove('pip-active');
+  applyPictureEnhance();
+  clog('floatpip 关闭');
 }
 
 function restoreFromDocPip(fromEvent) {

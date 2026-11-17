@@ -212,6 +212,7 @@
     if (!v || !canvas) return;
     // 画布被搬进 Document PiP 窗口时，尺寸由窗口决定，不按页面里的视频矩形算
     if (canvas.ownerDocument && canvas.ownerDocument !== document) return;
+    if (canvas.closest && canvas.closest('#p-floatpip')) return;
     const box = v.getBoundingClientRect();
     const vw = v.videoWidth || 16;
     const vh = v.videoHeight || 9;
