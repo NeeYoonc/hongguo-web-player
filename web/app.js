@@ -3240,21 +3240,33 @@ function bindPictureInPictureHooks() {
   const v = document.getElementById('video');
   if (!v || v.__srPipBound) return;
   v.__srPipBound = true;
-  // 浏览器画中画窗口渲染的是原始 <video>，超分画布不会跟着走；
-  // 进入画中画时暂停超分，退出后恢复，避免「两个画面、一个锐一个不锐」。
-  v.addEventListener('enterpictureinpicture', function () {
+  const box = document.querySelector('.player-video');
+
+  const enter = function () {
     if (settingsState.sr) {
       window.__srPipPaused = true;
       disablePictureEnhance();
-      toast('画中画模式已暂停 GPU 超分', 2200);
     }
-  });
-  v.addEventListener('leavepictureinpicture', function () {
+    // 页面内只留提示，避免和最容易浮在上层的 PiP 窗口出现两个画面
+    if (box) box.classList.add('pip-active');
+    toast('画中画播放中：页面内画面已隐藏，超分暂停', 2600);
+  };
+  const leave = function () {
+    if (box) box.classList.remove('pip-active');
     if (window.__srPipPaused) {
       window.__srPipPaused = false;
       applyPictureEnhance();
     }
-  });
+  };
+
+  v.addEventListener('enterpictureinpicture', enter);
+  v.addEventListener('leavepictureinpicture', leave);
+  // 某些触发方式（媒体中心按钮）事件不一定到，轮询兜底
+  setInterval(function () {
+    const active = document.pictureInPictureElement === v;
+    if (active && !window.__srPipActive) { window.__srPipActive = true; enter(); }
+    if (!active && window.__srPipActive) { window.__srPipActive = false; leave(); }
+  }, 800);
 }
 
 function bindViewEvents() {
@@ -3833,7 +3845,6 @@ function bindEvents() {
   if (document.hidden) pausePlaybackForNav('hidden');
 });
 
-bindPictureInPictureHooks();
 dmApplyStyle();
     if (dm.on) dmLoad(playerState.token);
     else { dmItems = []; dmIndex = 0; dmClear(); }
@@ -4413,6 +4424,7 @@ if (window.HGSuperRes) {
   document.addEventListener('fullscreenchange', function () { if (settingsState.sr) window.HGSuperRes.layout(); });
 }
 applyPictureEnhance();
+bindPictureInPictureHooks();
 dmApplyStyle();
 clog('页面加载 v8 ' + location.href);
 bindEvents();

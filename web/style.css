@@ -1218,3 +1218,16 @@ button.meta-tag:hover { background: rgba(255, 45, 85, .22); color: #ff8ba0; text
   background: #000;
 }
 .danmaku-layer { z-index: 2; }
+
+/* 画中画播放中：页面内隐藏视频与超分画布，只留提示，避免两个画面 */
+.player-video.pip-active video,
+.player-video.pip-active #p-sr { visibility: hidden !important; }
+.player-video.pip-active::after {
+  content: '画中画播放中';
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  color: #8b949e;
+  font-size: 14px;
+  pointer-events: none;
+}
